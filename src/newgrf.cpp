@@ -82,6 +82,9 @@ GRFLoadedFeatures _loaded_newgrf_features;
 
 static const uint MAX_SPRITEGROUP = UINT8_MAX; ///< Maximum GRF-local ID for a spritegroup.
 
+/** Hack to speedup ALL vehicles by a constant factor during loading of newgrfs.
+Useful for making game with really early and slow 1700-ths vehicles and paying for infrastructure still profitable */
+static const int MAX_SPEED_MULTIPLIER = 2;
 /** Temporary data during loading of GRFs */
 struct GrfProcessingState {
 private:
@@ -1085,7 +1088,7 @@ static ChangeInfoResult RailVehicleChangeInfo(uint engine, int numinfo, int prop
 				uint16 speed = buf->ReadWord();
 				if (speed == 0xFFFF) speed = 0;
 
-				rvi->max_speed = speed;
+				rvi->max_speed = MAX_SPEED_MULTIPLIER * speed;
 				break;
 			}
 
@@ -1357,7 +1360,7 @@ static ChangeInfoResult RoadVehicleChangeInfo(uint engine, int numinfo, int prop
 				break;
 
 			case 0x08: // Speed (1 unit is 0.5 kmh)
-				rvi->max_speed = buf->ReadByte();
+				rvi->max_speed = MAX_SPEED_MULTIPLIER * buf->ReadByte();
 				break;
 
 			case PROP_ROADVEH_RUNNING_COST_FACTOR: // 0x09 Running cost factor
@@ -1571,7 +1574,7 @@ static ChangeInfoResult ShipVehicleChangeInfo(uint engine, int numinfo, int prop
 				break;
 
 			case PROP_SHIP_SPEED: // 0x0B Speed (1 unit is 0.5 km-ish/h)
-				svi->max_speed = buf->ReadByte();
+				svi->max_speed = MAX_SPEED_MULTIPLIER * buf->ReadByte();
 				break;
 
 			case 0x0C: { // Cargo type
@@ -1751,7 +1754,7 @@ static ChangeInfoResult AircraftVehicleChangeInfo(uint engine, int numinfo, int 
 				break;
 
 			case PROP_AIRCRAFT_SPEED: // 0x0C Speed (1 unit is 8 mph, we translate to 1 unit is 1 km-ish/h)
-				avi->max_speed = (buf->ReadByte() * 128) / 10;
+				avi->max_speed = MAX_SPEED_MULTIPLIER * (buf->ReadByte() * 128) / 10;
 				break;
 
 			case 0x0D: // Acceleration
@@ -4243,7 +4246,7 @@ static ChangeInfoResult RailTypeChangeInfo(uint id, int numinfo, int prop, ByteR
 				break;
 
 			case 0x14: // Speed limit
-				rti->max_speed = buf->ReadWord();
+				rti->max_speed = MAX_SPEED_MULTIPLIER * buf->ReadWord();
 				break;
 
 			case 0x15: // Acceleration model
@@ -4448,7 +4451,7 @@ static ChangeInfoResult RoadTypeChangeInfo(uint id, int numinfo, int prop, ByteR
 				break;
 
 			case 0x14: // Speed limit
-				rti->max_speed = buf->ReadWord();
+				rti->max_speed = MAX_SPEED_MULTIPLIER * buf->ReadWord();
 				break;
 
 			case 0x16: // Map colour
