@@ -268,8 +268,9 @@ void NetworkDrawChatMessage()
 static void SendChat(const char *buf, DestType type, int dest)
 {
 	if (StrEmpty(buf)) return;
+	assert(type >= DESTTYPE_BROADCAST && type <= DESTTYPE_CLIENT);
 	if (!_network_server) {
-		MyClient::SendChat((NetworkAction)(NETWORK_ACTION_CHAT + type), type, dest, buf, 0);
+		MyClient::SendChat((NetworkAction)(NETWORK_ACTION_CHAT + type), type, dest, buf, NetworkTextMessageData());
 	} else {
 		NetworkServerSendChat((NetworkAction)(NETWORK_ACTION_CHAT + type), type, dest, buf, CLIENT_ID_SERVER);
 	}
@@ -299,7 +300,8 @@ struct NetworkChatWindow : public Window {
 		static const StringID chat_captions[] = {
 			STR_NETWORK_CHAT_ALL_CAPTION,
 			STR_NETWORK_CHAT_COMPANY_CAPTION,
-			STR_NETWORK_CHAT_CLIENT_CAPTION
+			STR_NETWORK_CHAT_CLIENT_CAPTION,
+			STR_NULL,
 		};
 		assert((uint)this->dtype < lengthof(chat_captions));
 		this->dest_string = chat_captions[this->dtype];

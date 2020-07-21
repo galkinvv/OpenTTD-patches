@@ -16,6 +16,7 @@
 #include "tcp.h"
 #include "../network_type.h"
 #include "../../core/pool_type.hpp"
+#include <memory>
 
 /**
  * Enum with all types of TCP packets.
@@ -60,6 +61,8 @@ enum PacketGameType {
 	PACKET_CLIENT_GAME_PASSWORD,         ///< Clients sends the (hashed) game password.
 	PACKET_SERVER_NEED_COMPANY_PASSWORD, ///< Server requests the (hashed) company password.
 	PACKET_CLIENT_COMPANY_PASSWORD,      ///< Client sends the (hashed) company password.
+	PACKET_CLIENT_SETTINGS_PASSWORD,     ///< Client sends the (hashed) settings password.
+	PACKET_SERVER_SETTINGS_ACCESS,       ///< Server sends the settings access state.
 
 	/* The server welcomes the authenticated client and sends information of other clients. */
 	PACKET_SERVER_WELCOME,               ///< Server welcomes you and gives you your #ClientID.
@@ -118,6 +121,8 @@ enum PacketGameType {
 	PACKET_SERVER_QUIT,                  ///< A server tells that a client has quit.
 	PACKET_CLIENT_ERROR,                 ///< A client reports an error to the server.
 	PACKET_SERVER_ERROR_QUIT,            ///< A server tells that a client has hit an error and did quit.
+	PACKET_CLIENT_DESYNC_LOG,            ///< A client reports a desync log
+	PACKET_SERVER_DESYNC_LOG,            ///< A server reports a desync log
 
 	PACKET_END,                          ///< Must ALWAYS be on the end of this list!! (period)
 };
@@ -131,13 +136,16 @@ class CommandQueue {
 	CommandPacket *last;  ///< The last packet in the queue; only valid when first != nullptr.
 	uint count;           ///< The number of items in the queue.
 
+	void Append(CommandPacket *p, bool move);
+
 public:
 	/** Initialise the command queue. */
 	CommandQueue() : first(nullptr), last(nullptr), count(0) {}
 	/** Clear the command queue. */
 	~CommandQueue() { this->Free(); }
-	void Append(CommandPacket *p);
-	CommandPacket *Pop(bool ignore_paused = false);
+	void Append(CommandPacket &p) { this->Append(&p, false); }
+	void Append(CommandPacket &&p) { this->Append(&p, true); }
+	std::unique_ptr<CommandPacket> Pop(bool ignore_paused = false);
 	CommandPacket *Peek(bool ignore_paused = false);
 	void Free();
 	/** Get the number of items in the queue. */
@@ -151,6 +159,7 @@ private:
 	NetworkClientInfo *info;  ///< Client info related to this socket
 
 protected:
+	bool ignore_close = false;
 	NetworkRecvStatus ReceiveInvalidPacket(PacketGameType type);
 
 	/**
@@ -254,6 +263,21 @@ protected:
 	 * @param p The packet that was just received.
 	 */
 	virtual NetworkRecvStatus Receive_CLIENT_COMPANY_PASSWORD(Packet *p);
+
+	/**
+	 * Send a password to the server to authorize
+	 * uint8   Password type (see NetworkPasswordType).
+	 * string  The password.
+	 * @param p The packet that was just received.
+	 */
+	virtual NetworkRecvStatus Receive_CLIENT_SETTINGS_PASSWORD(Packet *p);
+
+	/**
+	 * Indication to the client that the setting access state has changed
+	 * bool setting access state
+	 * @param p The packet that was just received.
+	 */
+	virtual NetworkRecvStatus Receive_SERVER_SETTINGS_ACCESS(Packet *p);
 
 	/**
 	 * The client is joined and ready to receive his map:
@@ -420,6 +444,8 @@ protected:
 	 * @param p The packet that was just received.
 	 */
 	virtual NetworkRecvStatus Receive_CLIENT_ERROR(Packet *p);
+	virtual NetworkRecvStatus Receive_CLIENT_DESYNC_LOG(Packet *p);
+	virtual NetworkRecvStatus Receive_SERVER_DESYNC_LOG(Packet *p);
 
 	/**
 	 * Notification that a client left the game:

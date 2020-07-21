@@ -91,7 +91,7 @@ ScriptTileList_IndustryAccepting::ScriptTileList_IndustryAccepting(IndustryID in
 		if (!cargo_accepts) return;
 	}
 
-	if (!_settings_game.station.modified_catchment) radius = CA_UNMODIFIED;
+	if (!_settings_game.station.modified_catchment) radius = CA_UNMODIFIED + _settings_game.station.catchment_increase;
 
 	BitmapTileArea bta(TileArea(i->location).Expand(radius));
 	FillIndustryCatchment(i, radius, bta);
@@ -129,7 +129,7 @@ ScriptTileList_IndustryProducing::ScriptTileList_IndustryProducing(IndustryID in
 	}
 	if (!cargo_produces) return;
 
-	if (!_settings_game.station.modified_catchment) radius = CA_UNMODIFIED;
+	if (!_settings_game.station.modified_catchment) radius = CA_UNMODIFIED + _settings_game.station.catchment_increase;
 
 	BitmapTileArea bta(TileArea(i->location).Expand(radius));
 	FillIndustryCatchment(i, radius, bta);

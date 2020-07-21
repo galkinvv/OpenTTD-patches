@@ -98,8 +98,7 @@ char *strecat(char *dst, const char *src, const char *last)
  *
  * Copies the source string to the destination buffer with respect of the
  * terminating null-character and the last pointer to the last element in
- * the destination buffer. If the last pointer is set to nullptr no boundary
- * check is performed.
+ * the destination buffer.
  *
  * @note usage: strecpy(dst, src, lastof(dst));
  * @note lastof() applies only to fixed size arrays
@@ -107,9 +106,10 @@ char *strecat(char *dst, const char *src, const char *last)
  * @param dst The destination buffer
  * @param src The buffer containing the string to copy
  * @param last The pointer to the last element of the destination buffer
+ * @param quiet_mode If set to true, emitted warning for truncating the input string is emitted at level 1 instead of 0
  * @return The pointer to the terminating null-character in the destination buffer
  */
-char *strecpy(char *dst, const char *src, const char *last)
+char *strecpy(char *dst, const char *src, const char *last, bool quiet_mode)
 {
 	assert(dst <= last);
 	while (dst != last && *src != '\0') {
@@ -121,7 +121,7 @@ char *strecpy(char *dst, const char *src, const char *last)
 #if defined(STRGEN) || defined(SETTINGSGEN)
 		error("String too long for destination buffer");
 #else /* STRGEN || SETTINGSGEN */
-		DEBUG(misc, 0, "String too long for destination buffer");
+		DEBUG(misc, quiet_mode ? 1 : 0, "String too long for destination buffer");
 #endif /* STRGEN || SETTINGSGEN */
 	}
 	return dst;
@@ -142,6 +142,16 @@ char *stredup(const char *s, const char *last)
 	return tmp;
 }
 
+char *str_vfmt(const char *str, va_list va)
+{
+	char buf[4096];
+
+	int len = vseprintf(buf, lastof(buf), str, va);
+	char *p = MallocT<char>(len + 1);
+	memcpy(p, buf, len + 1);
+	return p;
+}
+
 /**
  * Format, "printf", into a newly allocated string.
  * @param str The formatting string.
@@ -149,15 +159,33 @@ char *stredup(const char *s, const char *last)
  */
 char *CDECL str_fmt(const char *str, ...)
 {
-	char buf[4096];
 	va_list va;
-
 	va_start(va, str);
-	int len = vseprintf(buf, lastof(buf), str, va);
+	char *output = str_vfmt(str, va);
 	va_end(va);
-	char *p = MallocT<char>(len + 1);
-	memcpy(p, buf, len + 1);
-	return p;
+	return output;
+}
+
+std::string stdstr_vfmt(const char *str, va_list va)
+{
+	char buf[4096];
+
+	int len = vseprintf(buf, lastof(buf), str, va);
+	return std::string(buf, len);
+}
+
+/**
+ * Format, "printf", into a std::string.
+ * @param str The formatting string.
+ * @return The formatted string.
+ */
+std::string CDECL stdstr_fmt(const char *str, ...)
+{
+	va_list va;
+	va_start(va, str);
+	std::string output = stdstr_vfmt(str, va);
+	va_end(va);
+	return output;
 }
 
 /**
@@ -165,8 +193,9 @@ char *CDECL str_fmt(const char *str, ...)
  * it's new, static value.
  * @param str the string to scan
  * @param last the last valid character of str
+ * @return Pointer to new null terminator.
  */
-void str_fix_scc_encoded(char *str, const char *last)
+const char *str_fix_scc_encoded(char *str, const char *last)
 {
 	while (str <= last && *str != '\0') {
 		size_t len = Utf8EncodedCharLen(*str);
@@ -182,6 +211,7 @@ void str_fix_scc_encoded(char *str, const char *last)
 		str += Utf8Encode(str, c);
 	}
 	*str = '\0';
+	return str;
 }
 
 
@@ -233,12 +263,14 @@ static void str_validate(T &dst, const char *str, const char *last, StringValida
  * @param str the string to validate
  * @param last the last valid character of str
  * @param settings the settings for the string validation.
+ * @return pointer to terminating 0.
  */
-void str_validate(char *str, const char *last, StringValidationSettings settings)
+char *str_validate(char *str, const char *last, StringValidationSettings settings)
 {
 	char *dst = str;
 	str_validate(dst, str, last, settings);
 	*dst = '\0';
+	return dst;
 }
 
 /**
@@ -325,6 +357,54 @@ void str_strip_colours(char *str)
 	*dst = '\0';
 }
 
+/** Scans the string for a wchar and replace it with another wchar
+ * @param str The string buffer
+ * @param last The pointer to the last element of the string buffer
+ * @param find The character to find
+ * @param replace The character to replace, may be 0 to not insert any character
+ * @return The pointer to the terminating null-character in the string buffer
+ */
+char *str_replace_wchar(char *str, const char *last, WChar find, WChar replace)
+{
+	char *dst = str;
+
+	while (str <= last && *str != '\0') {
+		size_t len = Utf8EncodedCharLen(*str);
+		/* If the character is unknown, i.e. encoded length is 0
+		 * we assume worst case for the length check.
+		 * The length check is needed to prevent Utf8Decode to read
+		 * over the terminating '\0' if that happens to be placed
+		 * within the encoding of an UTF8 character. */
+		if ((len == 0 && str + 4 > last) || str + len > last) break;
+
+		WChar c;
+		len = Utf8Decode(&c, str);
+		/* It's possible to encode the string termination character
+		 * into a multiple bytes. This prevents those termination
+		 * characters to be skipped */
+		if (c == '\0') break;
+
+		if (c != find) {
+			/* Copy the character back. Even if dst is current the same as str
+			 * (i.e. no characters have been changed) this is quicker than
+			 * moving the pointers ahead by len */
+			if (dst + len > last) break;
+			do {
+				*dst++ = *str++;
+			} while (--len != 0);
+		} else {
+			str += len;
+			if (replace) {
+				len = Utf8EncodedCharLen(replace);
+				if (dst + len > last) break;
+				dst += Utf8Encode(dst, replace);
+			}
+		}
+	}
+	*dst = '\0';
+	return dst;
+}
+
 /**
  * Get the length of an UTF-8 encoded string in number of characters
  * and thus not the number of bytes that the encoded string contains.
@@ -371,9 +451,17 @@ bool strtolower(char *str)
  */
 bool IsValidChar(WChar key, CharSetFilter afilter)
 {
+#if !defined(STRGEN) && !defined(SETTINGSGEN)
+	extern WChar GetDecimalSeparatorChar();
+#endif
 	switch (afilter) {
 		case CS_ALPHANUMERAL:  return IsPrintable(key);
 		case CS_NUMERAL:       return (key >= '0' && key <= '9');
+#if !defined(STRGEN) && !defined(SETTINGSGEN)
+		case CS_NUMERAL_DECIMAL: return (key >= '0' && key <= '9') || key == '.' || key == GetDecimalSeparatorChar();
+#else
+		case CS_NUMERAL_DECIMAL: return (key >= '0' && key <= '9') || key == '.';
+#endif
 		case CS_NUMERAL_SPACE: return (key >= '0' && key <= '9') || key == ' ';
 		case CS_ALPHA:         return IsPrintable(key) && !(key >= '0' && key <= '9');
 		case CS_HEXADECIMAL:   return (key >= '0' && key <= '9') || (key >= 'a' && key <= 'f') || (key >= 'A' && key <= 'F');
@@ -603,6 +691,37 @@ static const char *SkipGarbage(const char *str)
 	return str;
 }
 
+static int _strnatcmpIntl(const char *s1, const char *s2) {
+	while (*s1 && *s2) {
+		if (IsInsideBS(*s1, '0', 10) && IsInsideBS(*s2, '0', 10)) {
+			uint n1 = 0;
+			uint n2 = 0;
+			for (; IsInsideBS(*s1, '0', 10); s1++) {
+				n1 = (n1 * 10) + (*s1 - '0');
+			}
+			for (; IsInsideBS(*s2, '0', 10); s2++) {
+				n2 = (n2 * 10) + (*s2 - '0');
+			}
+			if (n1 != n2) return n1 > n2 ? 1 : -1;
+		} else {
+			char c1 = tolower(*s1);
+			char c2 = tolower(*s2);
+			if (c1 != c2) {
+				return c1 > c2 ? 1 : -1;
+			}
+			s1++;
+			s2++;
+		}
+	}
+	if (*s1 && !*s2) {
+		return 1;
+	} else if (*s2 && !*s1) {
+		return -1;
+	} else {
+		return 0;
+	}
+}
+
 /**
  * Compares two strings using case insensitive natural sort.
  *
@@ -636,8 +755,8 @@ int strnatcmp(const char *s1, const char *s2, bool ignore_garbage_at_front)
 	if (res != 0) return res - 2; // Convert to normal C return values.
 #endif
 
-	/* Do a normal comparison if ICU is missing or if we cannot create a collator. */
-	return strcasecmp(s1, s2);
+	/* Do a manual natural sort comparison if ICU is missing or if we cannot create a collator. */
+	return _strnatcmpIntl(s1, s2);
 }
 
 #ifdef WITH_UNISCRIBE

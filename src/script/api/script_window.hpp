@@ -290,6 +290,18 @@ public:
 		WC_VEHICLE_ORDERS                            = ::WC_VEHICLE_ORDERS,
 
 		/**
+		 * Vehicle cargo type load orders; %Window numbers:
+		 *   - #VehicleID = #CargoTypeOrdersWidgets
+		 */
+		WC_VEHICLE_CARGO_TYPE_LOAD_ORDERS = ::WC_VEHICLE_CARGO_TYPE_LOAD_ORDERS,
+
+		/**
+		 * Vehicle cargo type unload orders; %Window numbers:
+		 *   - #VehicleID = #CargoTypeOrdersWidgets
+		 */
+		WC_VEHICLE_CARGO_TYPE_UNLOAD_ORDERS = ::WC_VEHICLE_CARGO_TYPE_UNLOAD_ORDERS,
+
+		/**
 		 * Replace vehicle window; %Window numbers:
 		 *   - #VehicleType = #ReplaceVehicleWidgets
 		 */
@@ -318,6 +330,12 @@ public:
 		 *   - 0 = #JoinStationWidgets
 		 */
 		WC_SELECT_STATION                            = ::WC_SELECT_STATION,
+
+		/**
+		 * Select town (when placing a house); %Window numbers:
+		 *   - 0 = #SelectTownWidgets
+		 */
+		WC_SELECT_TOWN                               = ::WC_SELECT_TOWN,
 
 		/**
 		 * News window; %Window numbers:
@@ -452,6 +470,12 @@ public:
 		 *   - 0 = #BuildObjectWidgets
 		 */
 		WC_BUILD_OBJECT                              = ::WC_BUILD_OBJECT,
+
+		/**
+		 * Build house; %Window numbers:
+		 *  - 0 = #BuildHouseWidgets
+		*/
+		WC_BUILD_HOUSE                               = ::WC_BUILD_HOUSE,
 
 		/**
 		 * Build vehicle; %Window numbers:
@@ -2006,6 +2030,21 @@ public:
 		WID_O_SHARED_ORDER_LIST                      = ::WID_O_SHARED_ORDER_LIST,                      ///< Open list of shared vehicles.
 	};
 
+	/** Widgets of the #CargoTypeOrdersWindow class. */
+	enum CargoTypeOrdersWidgets {
+		WID_CTO_CAPTION                      = ::WID_CTO_CAPTION,                      ///< Caption of the window.
+		WID_CTO_HEADER                       = ::WID_CTO_HEADER,                       ///< Window header.
+		WID_CTO_CLOSEBTN                     = ::WID_CTO_CLOSEBTN,                     ///< Close button.
+		WID_CTO_SET_TO_ALL_LABEL             = ::WID_CTO_SET_TO_ALL_LABEL,             ///< 'Set to all' dropdown label
+		WID_CTO_SET_TO_ALL_DROPDOWN          = ::WID_CTO_SET_TO_ALL_DROPDOWN,          ///< 'Set to all' dropdown
+		WID_CTO_CARGO_ROW_FIRST              = ::WID_CTO_CARGO_ROW_FIRST,              ///< First cargo type order row.
+		WID_CTO_CARGO_ROW_LAST               = ::WID_CTO_CARGO_ROW_LAST,               ///< Last cargo type order row.
+		WID_CTO_CARGO_LABEL_FIRST            = ::WID_CTO_CARGO_LABEL_FIRST,            ///< First cargo label.
+		WID_CTO_CARGO_LABEL_LAST             = ::WID_CTO_CARGO_LABEL_LAST,             ///< Last cargo label.
+		WID_CTO_CARGO_DROPDOWN_FIRST         = ::WID_CTO_CARGO_DROPDOWN_FIRST,         ///< First order dropdown.
+		WID_CTO_CARGO_DROPDOWN_LAST          = ::WID_CTO_CARGO_DROPDOWN_LAST,          ///< Last order dropdown.
+	};
+
 	/* automatically generated from ../../widgets/osk_widget.h */
 	/** Widgets of the #OskWindow class. */
 	enum OnScreenKeyboardWidgets {
@@ -2045,6 +2084,7 @@ public:
 		WID_RAT_BUILD_EW                             = ::WID_RAT_BUILD_EW,                             ///< Build rail along the game view X axis.
 		WID_RAT_BUILD_Y                              = ::WID_RAT_BUILD_Y,                              ///< Build rail along the game grid Y axis.
 		WID_RAT_AUTORAIL                             = ::WID_RAT_AUTORAIL,                             ///< Autorail tool.
+		WID_RAT_POLYRAIL                             = ::WID_RAT_POLYRAIL,                             ///< Polyline rail tool.
 		WID_RAT_DEMOLISH                             = ::WID_RAT_DEMOLISH,                             ///< Destroy something with dynamite!
 		WID_RAT_BUILD_DEPOT                          = ::WID_RAT_BUILD_DEPOT,                          ///< Build a depot.
 		WID_RAT_BUILD_WAYPOINT                       = ::WID_RAT_BUILD_WAYPOINT,                       ///< Build a waypoint.
@@ -2115,6 +2155,7 @@ public:
 		WID_BS_ELECTRIC_PBS                          = ::WID_BS_ELECTRIC_PBS,                          ///< Build an electric path signal.
 		WID_BS_ELECTRIC_PBS_OWAY                     = ::WID_BS_ELECTRIC_PBS_OWAY,                     ///< Build an electric one way path signal.
 		WID_BS_CONVERT                               = ::WID_BS_CONVERT,                               ///< Convert the signal.
+		WID_BS_TRACE_RESTRICT                        = ::WID_BS_TRACE_RESTRICT,                        ///< Open trace restrict window.
 		WID_BS_DRAG_SIGNALS_DENSITY_LABEL            = ::WID_BS_DRAG_SIGNALS_DENSITY_LABEL,            ///< The current signal density.
 		WID_BS_DRAG_SIGNALS_DENSITY_DECREASE         = ::WID_BS_DRAG_SIGNALS_DENSITY_DECREASE,         ///< Decrease the signal density.
 		WID_BS_DRAG_SIGNALS_DENSITY_INCREASE         = ::WID_BS_DRAG_SIGNALS_DENSITY_INCREASE,         ///< Increase the signal density.
@@ -2406,6 +2447,7 @@ public:
 		WID_ETT_PLACE_ROCKS                          = ::WID_ETT_PLACE_ROCKS,                          ///< Place rocks button.
 		WID_ETT_PLACE_DESERT                         = ::WID_ETT_PLACE_DESERT,                         ///< Place desert button (in tropical climate).
 		WID_ETT_PLACE_OBJECT                         = ::WID_ETT_PLACE_OBJECT,                         ///< Place transmitter button.
+		WID_ETT_PLACE_HOUSE                          = ::WID_ETT_PLACE_HOUSE,                          ///< Place house button.
 		WID_ETT_BUTTONS_END                          = ::WID_ETT_BUTTONS_END,                          ///< End of pushable buttons.
 		WID_ETT_INCREASE_SIZE                        = ::WID_ETT_INCREASE_SIZE,                        ///< Upwards arrow button to increase terraforming size.
 		WID_ETT_DECREASE_SIZE                        = ::WID_ETT_DECREASE_SIZE,                        ///< Downwards arrow button to decrease terraforming size.
@@ -2553,6 +2595,34 @@ public:
 		WID_TF_LAYOUT_GRID2                          = ::WID_TF_LAYOUT_GRID2,                          ///< Selection for the 2x2 grid town layout.
 		WID_TF_LAYOUT_GRID3                          = ::WID_TF_LAYOUT_GRID3,                          ///< Selection for the 3x3 grid town layout.
 		WID_TF_LAYOUT_RANDOM                         = ::WID_TF_LAYOUT_RANDOM,                         ///< Selection for a randomly chosen town layout.
+	};
+
+	/** Widgets of the #HousePickerWindow class. */
+	enum HousePickerWidgets {
+		WID_HP_CAPTION                               = ::WID_HP_CAPTION,
+		WID_HP_MAIN_PANEL_SEL                        = ::WID_HP_MAIN_PANEL_SEL,                        ///< Selection widget to show/hide the main panel.
+		WID_HP_HOUSE_SETS_SEL                        = ::WID_HP_HOUSE_SETS_SEL,                        ///< Selection widget to show/hide the list of house sets.
+		WID_HP_HOUSE_SETS                            = ::WID_HP_HOUSE_SETS,                            ///< List of available house sets.
+		WID_HP_HOUSE_SELECT_MATRIX                   = ::WID_HP_HOUSE_SELECT_MATRIX,                   ///< Matrix with houses to select.
+		WID_HP_HOUSE_SELECT_SCROLL                   = ::WID_HP_HOUSE_SELECT_SCROLL,                   ///< Scrollbar associated with the house matrix.
+		WID_HP_HOUSE_SELECT                          = ::WID_HP_HOUSE_SELECT,                          ///< Panels with house images in the house matrix.
+		WID_HP_HOUSE_PREVIEW                         = ::WID_HP_HOUSE_PREVIEW,                         ///< House preview panel.
+		WID_HP_HOUSE_NAME                            = ::WID_HP_HOUSE_NAME,                            ///< House name display.
+		WID_HP_HISTORICAL_BUILDING                   = ::WID_HP_HISTORICAL_BUILDING,                   ///< "Historical building" label.
+		WID_HP_HOUSE_POPULATION                      = ::WID_HP_HOUSE_POPULATION,                      ///< House population display.
+		WID_HP_HOUSE_ZONES                           = ::WID_HP_HOUSE_ZONES,                           ///< House zones display.
+		WID_HP_HOUSE_LANDSCAPE                       = ::WID_HP_HOUSE_LANDSCAPE,                       ///< Information about house availability against the landscape.
+		WID_HP_HOUSE_LANDSCAPE_SEL                   = ::WID_HP_HOUSE_LANDSCAPE_SEL,                   ///< Selection widget to show/hide the landscape info.
+		WID_HP_HOUSE_YEARS                           = ::WID_HP_HOUSE_YEARS,                           ///< Years display.
+		WID_HP_HOUSE_ACCEPTANCE                      = ::WID_HP_HOUSE_ACCEPTANCE,                      ///< Cargo accepted.
+		WID_HP_HOUSE_SUPPLY                          = ::WID_HP_HOUSE_SUPPLY,                          ///< Cargo supplied.
+	};
+
+	/** Widgets of the #SelectTownWindow class. */
+	enum SelectTownWidgets {
+		WID_ST_CAPTION                               = ::WID_ST_CAPTION,                               ///< Caption of the window.
+		WID_ST_PANEL                                 = ::WID_ST_PANEL,                                 ///< Main panel.
+		WID_ST_SCROLLBAR                             = ::WID_ST_SCROLLBAR,                             ///< Scrollbar of the panel.
 	};
 
 	/* automatically generated from ../../widgets/transparency_widget.h */

@@ -16,6 +16,10 @@
 
 #include "../safeguards.h"
 
+static uint32 _jokerpp_separation_mode;
+std::vector<OrderList *> _jokerpp_auto_separation;
+std::vector<OrderList *> _jokerpp_non_auto_separation;
+
 /**
  * Converts this order from an old savegame's version;
  * it moves all bits to the new location.
@@ -26,7 +30,7 @@ void Order::ConvertFromOldSavegame()
 	this->flags = 0;
 
 	/* First handle non-stop - use value from savegame if possible, else use value from config file */
-	if (_settings_client.gui.sg_new_nonstop || (IsSavegameVersionBefore(SLV_22) && _savegame_type != SGT_TTO && _savegame_type != SGT_TTD && _settings_client.gui.new_nonstop)) {
+	if (_settings_client.gui.sg_new_nonstop || (IsSavegameVersionBefore(SLV_22) && _savegame_type != SGT_TTO && _savegame_type != SGT_TTD && (_settings_client.gui.new_nonstop || _settings_game.order.nonstop_only))) {
 		/* OFB_NON_STOP */
 		this->SetNonStopType((old_flags & 8) ? ONSF_NO_STOP_AT_ANY_STATION : ONSF_NO_STOP_AT_INTERMEDIATE_STATIONS);
 	} else {
@@ -104,13 +108,18 @@ const SaveLoad *GetOrderDescription()
 	static const SaveLoad _order_desc[] = {
 		     SLE_VAR(Order, type,           SLE_UINT8),
 		     SLE_VAR(Order, flags,          SLE_UINT8),
+		SLE_CONDNULL_X(1, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_SPRINGPP)),
 		     SLE_VAR(Order, dest,           SLE_UINT16),
 		     SLE_REF(Order, next,           REF_ORDER),
 		 SLE_CONDVAR(Order, refit_cargo,    SLE_UINT8,   SLV_36, SL_MAX_VERSION),
 		SLE_CONDNULL(1,                                  SLV_36, SLV_182), // refit_subtype
-		 SLE_CONDVAR(Order, wait_time,      SLE_UINT16,  SLV_67, SL_MAX_VERSION),
-		 SLE_CONDVAR(Order, travel_time,    SLE_UINT16,  SLV_67, SL_MAX_VERSION),
+		SLE_CONDVAR_X(Order, occupancy,     SLE_UINT8,           SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_ORDER_OCCUPANCY)),
+		SLE_CONDVAR_X(Order, wait_time,     SLE_FILE_U16 | SLE_VAR_U32,  SLV_67, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_TIMETABLE_EXTRA, 0, 5)),
+		SLE_CONDVAR_X(Order, wait_time,     SLE_UINT32,                  SLV_67, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_TIMETABLE_EXTRA, 6)),
+		SLE_CONDVAR_X(Order, travel_time,   SLE_FILE_U16 | SLE_VAR_U32,  SLV_67, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_TIMETABLE_EXTRA, 0, 5)),
+		SLE_CONDVAR_X(Order, travel_time,   SLE_UINT32,                  SLV_67, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_TIMETABLE_EXTRA, 6)),
 		 SLE_CONDVAR(Order, max_speed,      SLE_UINT16, SLV_172, SL_MAX_VERSION),
+		SLE_CONDVAR_X(Order, jump_counter,  SLE_INT8,            SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_MORE_COND_ORDERS)),
 
 		/* Leftover from the minor savegame version stuff
 		 * We will never use those free bytes, but we have to keep this line to allow loading of old savegames */
@@ -186,6 +195,40 @@ static void Load_ORDR()
 	}
 }
 
+const SaveLoad *GetOrderExtraInfoDescription()
+{
+	static const SaveLoad _order_extra_info_desc[] = {
+		SLE_CONDARR_X(OrderExtraInfo, cargo_type_flags, SLE_UINT8, 32,        SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_CARGO_TYPE_ORDERS, 1, 2)),
+		SLE_CONDARR_X(OrderExtraInfo, cargo_type_flags, SLE_UINT8, NUM_CARGO, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_CARGO_TYPE_ORDERS, 3)),
+		SLE_CONDVAR_X(OrderExtraInfo, xflags,           SLE_UINT8,            SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_TIMETABLE_EXTRA)),
+		SLE_CONDVAR_X(OrderExtraInfo, xdata,           SLE_UINT32,            SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_ORDER_EXTRA_DATA)),
+		SLE_END()
+	};
+
+	return _order_extra_info_desc;
+}
+
+void Save_ORDX()
+{
+	for (Order *order : Order::Iterate()) {
+		if (order->extra) {
+			SlSetArrayIndex(order->index);
+			SlObject(order->extra.get(), GetOrderExtraInfoDescription());
+		}
+	}
+}
+
+void Load_ORDX()
+{
+	int index;
+	while ((index = SlIterateArray()) != -1) {
+		Order *order = Order::GetIfValid(index);
+		assert(order != nullptr);
+		order->AllocExtraInfo();
+		SlObject(order->extra.get(), GetOrderExtraInfoDescription());
+	}
+}
+
 static void Ptrs_ORDR()
 {
 	/* Orders from old savegames have pointers corrected in Load_ORDR */
@@ -199,7 +242,15 @@ static void Ptrs_ORDR()
 const SaveLoad *GetOrderListDescription()
 {
 	static const SaveLoad _orderlist_desc[] = {
-		SLE_REF(OrderList, first,              REF_ORDER),
+		      SLE_REF(OrderList, first,                                    REF_ORDER),
+		SLE_CONDVARVEC_X(OrderList, scheduled_dispatch,                    SLE_UINT32, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_SCHEDULED_DISPATCH)),
+		SLE_CONDVAR_X(OrderList, scheduled_dispatch_duration,              SLE_UINT32, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_SCHEDULED_DISPATCH)),
+		SLE_CONDVAR_X(OrderList, scheduled_dispatch_start_date,            SLE_INT32,  SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_SCHEDULED_DISPATCH)),
+		SLE_CONDVAR_X(OrderList, scheduled_dispatch_start_full_date_fract, SLE_UINT16, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_SCHEDULED_DISPATCH)),
+		SLE_CONDVAR_X(OrderList, scheduled_dispatch_last_dispatch,         SLE_INT32,  SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_SCHEDULED_DISPATCH)),
+		SLE_CONDVAR_X(OrderList, scheduled_dispatch_max_delay,             SLE_INT32,  SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_SCHEDULED_DISPATCH)),
+		SLEG_CONDVAR_X(_jokerpp_separation_mode,                           SLE_UINT32, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_JOKERPP)),
+		SLE_CONDNULL_X(21,                                                             SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_JOKERPP)),
 		SLE_END()
 	};
 
@@ -216,20 +267,30 @@ static void Save_ORDL()
 
 static void Load_ORDL()
 {
+	_jokerpp_auto_separation.clear();
+	_jokerpp_non_auto_separation.clear();
 	int index;
 
 	while ((index = SlIterateArray()) != -1) {
 		/* set num_orders to 0 so it's a valid OrderList */
 		OrderList *list = new (index) OrderList(0);
 		SlObject(list, GetOrderListDescription());
+		if (SlXvIsFeaturePresent(XSLFI_JOKERPP)) {
+			if (_jokerpp_separation_mode == 0) {
+				_jokerpp_auto_separation.push_back(list);
+			} else {
+				_jokerpp_non_auto_separation.push_back(list);
+			}
+		}
 	}
 
 }
 
-static void Ptrs_ORDL()
+void Ptrs_ORDL()
 {
 	for (OrderList *list : OrderList::Iterate()) {
 		SlObject(list, GetOrderListDescription());
+		list->ReindexOrderList();
 	}
 }
 
@@ -241,17 +302,24 @@ const SaveLoad *GetOrderBackupDescription()
 		     SLE_VAR(OrderBackup, group,                    SLE_UINT16),
 		 SLE_CONDVAR(OrderBackup, service_interval,         SLE_FILE_U32 | SLE_VAR_U16,  SL_MIN_VERSION, SLV_192),
 		 SLE_CONDVAR(OrderBackup, service_interval,         SLE_UINT16,                SLV_192, SL_MAX_VERSION),
-		    SLE_SSTR(OrderBackup, name,                     SLE_STR),
+		     SLE_STR(OrderBackup, name,                     SLE_STR, 0),
 		SLE_CONDNULL(2,                                                                  SL_MIN_VERSION, SLV_192), // clone (2 bytes of pointer, i.e. garbage)
 		 SLE_CONDREF(OrderBackup, clone,                    REF_VEHICLE,               SLV_192, SL_MAX_VERSION),
 		     SLE_VAR(OrderBackup, cur_real_order_index,     SLE_UINT8),
 		 SLE_CONDVAR(OrderBackup, cur_implicit_order_index, SLE_UINT8,                 SLV_176, SL_MAX_VERSION),
+		SLE_CONDVAR_X(OrderBackup, cur_timetable_order_index, SLE_UINT8,        SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_TIMETABLE_EXTRA)),
 		 SLE_CONDVAR(OrderBackup, current_order_time,       SLE_UINT32,                SLV_176, SL_MAX_VERSION),
 		 SLE_CONDVAR(OrderBackup, lateness_counter,         SLE_INT32,                 SLV_176, SL_MAX_VERSION),
 		 SLE_CONDVAR(OrderBackup, timetable_start,          SLE_INT32,                 SLV_176, SL_MAX_VERSION),
+		SLE_CONDVAR_X(OrderBackup,timetable_start_subticks, SLE_UINT16,         SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_TIMETABLES_START_TICKS, 2)),
 		 SLE_CONDVAR(OrderBackup, vehicle_flags,            SLE_FILE_U8 | SLE_VAR_U16, SLV_176, SLV_180),
 		 SLE_CONDVAR(OrderBackup, vehicle_flags,            SLE_UINT16,                SLV_180, SL_MAX_VERSION),
 		     SLE_REF(OrderBackup, orders,                   REF_ORDER),
+		SLE_CONDVARVEC_X(OrderBackup, scheduled_dispatch,                    SLE_UINT32, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_SCHEDULED_DISPATCH, 2)),
+		SLE_CONDVAR_X(OrderBackup, scheduled_dispatch_duration,              SLE_UINT32, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_SCHEDULED_DISPATCH, 2)),
+		SLE_CONDVAR_X(OrderBackup, scheduled_dispatch_start_date,            SLE_INT32,  SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_SCHEDULED_DISPATCH, 2)),
+		SLE_CONDVAR_X(OrderBackup, scheduled_dispatch_start_full_date_fract, SLE_UINT16, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_SCHEDULED_DISPATCH, 2)),
+		SLE_CONDVAR_X(OrderBackup, scheduled_dispatch_max_delay,             SLE_INT32,  SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_SCHEDULED_DISPATCH, 2)),
 		     SLE_END()
 	};
 
@@ -292,5 +360,6 @@ static void Ptrs_BKOR()
 extern const ChunkHandler _order_chunk_handlers[] = {
 	{ 'BKOR', Save_BKOR, Load_BKOR, Ptrs_BKOR, nullptr, CH_ARRAY},
 	{ 'ORDR', Save_ORDR, Load_ORDR, Ptrs_ORDR, nullptr, CH_ARRAY},
-	{ 'ORDL', Save_ORDL, Load_ORDL, Ptrs_ORDL, nullptr, CH_ARRAY | CH_LAST},
+	{ 'ORDL', Save_ORDL, Load_ORDL, Ptrs_ORDL, nullptr, CH_ARRAY},
+	{ 'ORDX', Save_ORDX, Load_ORDX, nullptr,      nullptr, CH_SPARSE_ARRAY | CH_LAST},
 };

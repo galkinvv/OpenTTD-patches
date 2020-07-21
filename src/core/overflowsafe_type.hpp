@@ -11,6 +11,7 @@
 #define OVERFLOWSAFE_TYPE_HPP
 
 #include "math_func.hpp"
+#include <type_traits>
 
 /**
  * Overflow safe template for integers, i.e. integers that will never overflow
@@ -26,6 +27,7 @@ class OverflowSafeInt
 private:
 	/** The non-overflow safe backend to store the value in. */
 	T m_value;
+	typedef typename std::make_unsigned<T>::type T_unsigned;
 public:
 	OverflowSafeInt() : m_value(0) { }
 
@@ -44,12 +46,30 @@ public:
 	 */
 	inline OverflowSafeInt& operator += (const OverflowSafeInt& other)
 	{
+#ifdef WITH_OVERFLOW_BUILTINS
+		if (unlikely(__builtin_add_overflow(this->m_value, other.m_value, &this->m_value))) {
+			this->m_value = (other.m_value < 0) ? T_MIN : T_MAX;
+		}
+#else
 		if ((T_MAX - abs(other.m_value)) < abs(this->m_value) &&
 				(this->m_value < 0) == (other.m_value < 0)) {
 			this->m_value = (this->m_value < 0) ? T_MIN : T_MAX ;
 		} else {
 			this->m_value += other.m_value;
 		}
+#endif
+		return *this;
+	}
+
+	inline OverflowSafeInt& operator -= (const OverflowSafeInt& other)
+	{
+#ifdef WITH_OVERFLOW_BUILTINS
+		if (unlikely(__builtin_sub_overflow(this->m_value, other.m_value, &this->m_value))) {
+			this->m_value = (other.m_value < 0) ? T_MAX : T_MIN;
+		}
+#else
+		*this += (-other);
+#endif
 		return *this;
 	}
 
@@ -57,7 +77,6 @@ public:
 	inline OverflowSafeInt  operator +  (const OverflowSafeInt& other) const { OverflowSafeInt result = *this; result += other; return result; }
 	inline OverflowSafeInt  operator +  (const int              other) const { OverflowSafeInt result = *this; result += (int64)other; return result; }
 	inline OverflowSafeInt  operator +  (const uint             other) const { OverflowSafeInt result = *this; result += (int64)other; return result; }
-	inline OverflowSafeInt& operator -= (const OverflowSafeInt& other)       { return *this += (-other); }
 	inline OverflowSafeInt  operator -  (const OverflowSafeInt& other) const { OverflowSafeInt result = *this; result -= other; return result; }
 	inline OverflowSafeInt  operator -  (const int              other) const { OverflowSafeInt result = *this; result -= (int64)other; return result; }
 	inline OverflowSafeInt  operator -  (const uint             other) const { OverflowSafeInt result = *this; result -= (int64)other; return result; }
@@ -75,11 +94,20 @@ public:
 	 */
 	inline OverflowSafeInt& operator *= (const int factor)
 	{
+#ifdef WITH_OVERFLOW_BUILTINS
+		T out;
+		if (likely(!__builtin_mul_overflow(this->m_value, factor, &out))) {
+			this->m_value = out;
+		} else {
+			this->m_value = ((this->m_value < 0) == (factor < 0)) ? T_MAX : T_MIN;
+		}
+#else
 		if (factor != 0 && (T_MAX / abs(factor)) < abs(this->m_value)) {
 			 this->m_value = ((this->m_value < 0) == (factor < 0)) ? T_MAX : T_MIN ;
 		} else {
 			this->m_value *= factor ;
 		}
+#endif
 		return *this;
 	}
 
@@ -101,7 +129,7 @@ public:
 	inline OverflowSafeInt  operator %  (const int  divisor) const { OverflowSafeInt result = *this; result %= divisor; return result; }
 
 	/* Operators for shifting */
-	inline OverflowSafeInt& operator <<= (const int shift)       { this->m_value <<= shift; return *this; }
+	inline OverflowSafeInt& operator <<= (const int shift)       { this->m_value = ((T_unsigned) this->m_value) << shift; return *this; }
 	inline OverflowSafeInt  operator <<  (const int shift) const { OverflowSafeInt result = *this; result <<= shift; return result; }
 	inline OverflowSafeInt& operator >>= (const int shift)       { this->m_value >>= shift; return *this; }
 	inline OverflowSafeInt  operator >>  (const int shift) const { OverflowSafeInt result = *this; result >>= shift; return result; }

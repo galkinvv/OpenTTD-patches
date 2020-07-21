@@ -133,6 +133,7 @@ struct DropdownWindow : Window {
 	GUITimer scrolling_timer;     ///< Timer for auto-scroll of the item list.
 	Point position;               ///< Position of the topleft corner of the window.
 	Scrollbar *vscroll;
+	DropDownSyncFocus sync_parent_focus; ///< Call parent window's OnFocus[Lost]().
 
 	/**
 	 * Create a dropdown menu.
@@ -146,12 +147,15 @@ struct DropdownWindow : Window {
 	 * @param wi_colour     Colour of the parent widget.
 	 * @param scroll        Dropdown menu has a scrollbar.
 	 */
-	DropdownWindow(Window *parent, DropDownList &&list, int selected, int button, bool instant_close, const Point &position, const Dimension &size, Colours wi_colour, bool scroll)
+	DropdownWindow(Window *parent, DropDownList &&list, int selected, int button, bool instant_close, const Point &position, const Dimension &size, Colours wi_colour, bool scroll, DropDownSyncFocus sync_parent_focus)
 			: Window(&_dropdown_desc), list(std::move(list))
 	{
 		assert(this->list.size() > 0);
 
 		this->position = position;
+		this->parent_wnd_class = parent->window_class;
+		this->parent_wnd_num   = parent->window_number;
+		this->sync_parent_focus = sync_parent_focus;
 
 		this->CreateNestedTree();
 
@@ -180,8 +184,6 @@ struct DropdownWindow : Window {
 		this->vscroll->SetCapacity(size.height * (uint16)this->list.size() / list_height);
 		this->vscroll->SetCount((uint16)this->list.size());
 
-		this->parent_wnd_class = parent->window_class;
-		this->parent_wnd_num   = parent->window_number;
 		this->parent_button    = button;
 		this->selected_index   = selected;
 		this->click_delay      = 0;
@@ -203,6 +205,9 @@ struct DropdownWindow : Window {
 			pt.x -= w2->left;
 			pt.y -= w2->top;
 			w2->OnDropdownClose(pt, this->parent_button, this->selected_index, this->instant_close);
+			if (_focused_window == this) {
+				SetFocusedWindow(w2);
+			}
 		}
 	}
 
@@ -348,6 +353,22 @@ struct DropdownWindow : Window {
 			}
 		}
 	}
+
+	virtual void OnFocus(Window *previously_focused_window)
+	{
+		if (this->sync_parent_focus & DDSF_RECV_FOCUS) {
+			Window *parent = FindWindowById(this->parent_wnd_class, this->parent_wnd_num);
+			if (parent) parent->OnFocus(previously_focused_window);
+		}
+	}
+
+	virtual void OnFocusLost(Window *newly_focused_window)
+	{
+		if (this->sync_parent_focus & DDSF_LOST_FOCUS) {
+			Window *parent = FindWindowById(this->parent_wnd_class, this->parent_wnd_num);
+			if (parent) parent->OnFocusLost(newly_focused_window);
+		}
+	}
 };
 
 /**
@@ -363,7 +384,7 @@ struct DropdownWindow : Window {
  * @param instant_close Set to true if releasing mouse button should close the
  *                      list regardless of where the cursor is.
  */
-void ShowDropDownListAt(Window *w, DropDownList &&list, int selected, int button, Rect wi_rect, Colours wi_colour, bool auto_width, bool instant_close)
+void ShowDropDownListAt(Window *w, DropDownList &&list, int selected, int button, Rect wi_rect, Colours wi_colour, bool auto_width, bool instant_close, DropDownSyncFocus sync_parent_focus)
 {
 	DeleteWindowById(WC_DROPDOWN_MENU, 0);
 
@@ -430,7 +451,7 @@ void ShowDropDownListAt(Window *w, DropDownList &&list, int selected, int button
 
 	Point dw_pos = { w->left + (_current_text_dir == TD_RTL ? wi_rect.right + 1 - (int)width : wi_rect.left), top};
 	Dimension dw_size = {width, height};
-	DropdownWindow *dropdown = new DropdownWindow(w, std::move(list), selected, button, instant_close, dw_pos, dw_size, wi_colour, scroll);
+	DropdownWindow *dropdown = new DropdownWindow(w, std::move(list), selected, button, instant_close, dw_pos, dw_size, wi_colour, scroll, sync_parent_focus);
 
 	/* The dropdown starts scrolling downwards when opening it towards
 	 * the top and holding down the mouse button. It can be fooled by
@@ -450,7 +471,7 @@ void ShowDropDownListAt(Window *w, DropDownList &&list, int selected, int button
  * @param instant_close Set to true if releasing mouse button should close the
  *                      list regardless of where the cursor is.
  */
-void ShowDropDownList(Window *w, DropDownList &&list, int selected, int button, uint width, bool auto_width, bool instant_close)
+void ShowDropDownList(Window *w, DropDownList &&list, int selected, int button, uint width, bool auto_width, bool instant_close, DropDownSyncFocus sync_parent_focus)
 {
 	/* Our parent's button widget is used to determine where to place the drop
 	 * down list window. */
@@ -477,7 +498,7 @@ void ShowDropDownList(Window *w, DropDownList &&list, int selected, int button, 
 		}
 	}
 
-	ShowDropDownListAt(w, std::move(list), selected, button, wi_rect, wi_colour, auto_width, instant_close);
+	ShowDropDownListAt(w, std::move(list), selected, button, wi_rect, wi_colour, auto_width, instant_close, sync_parent_focus);
 }
 
 /**
@@ -491,17 +512,17 @@ void ShowDropDownList(Window *w, DropDownList &&list, int selected, int button, 
  * @param hidden_mask   Bitmask for hidden items (items with their bit set are not copied to the dropdown list).
  * @param width         Width of the dropdown menu. If \c 0, use the width of parent widget \a button.
  */
-void ShowDropDownMenu(Window *w, const StringID *strings, int selected, int button, uint32 disabled_mask, uint32 hidden_mask, uint width)
+void ShowDropDownMenu(Window *w, const StringID *strings, int selected, int button, uint32 disabled_mask, uint32 hidden_mask, uint width, DropDownSyncFocus sync_parent_focus)
 {
 	DropDownList list;
 
 	for (uint i = 0; strings[i] != INVALID_STRING_ID; i++) {
-		if (!HasBit(hidden_mask, i)) {
-			list.emplace_back(new DropDownListStringItem(strings[i], i, HasBit(disabled_mask, i)));
+		if (i >= 32 || !HasBit(hidden_mask, i)) {
+			list.emplace_back(new DropDownListStringItem(strings[i], i, i < 32 && HasBit(disabled_mask, i)));
 		}
 	}
 
-	if (!list.empty()) ShowDropDownList(w, std::move(list), selected, button, width);
+	if (!list.empty()) ShowDropDownList(w, std::move(list), selected, button, width, false, false, sync_parent_focus);
 }
 
 /**
@@ -528,3 +549,10 @@ int HideDropDownMenu(Window *pw)
 	return -1;
 }
 
+void GetParentWindowInfo(Window *w, WindowClass &parent_wc, WindowNumber &parent_wn)
+{
+	DropdownWindow *dw = dynamic_cast<DropdownWindow*>(w);
+	assert(dw != nullptr);
+	parent_wc = dw->parent_wnd_class;
+	parent_wn = dw->parent_wnd_num;
+}

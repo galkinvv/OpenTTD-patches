@@ -116,6 +116,7 @@ extern uint32 _sync_seed_1;
 #ifdef NETWORK_SEND_DOUBLE_SEED
 extern uint32 _sync_seed_2;
 #endif
+extern uint64 _sync_state_checksum;
 extern uint32 _sync_frame;
 extern bool _network_first_time;
 /* Vars needed for the join-GUI */
@@ -140,7 +141,7 @@ void NetworkAddServer(const char *b);
 void NetworkRebuildHostList();
 void UpdateNetworkGameWindow();
 
-bool IsNetworkCompatibleVersion(const char *version);
+bool IsNetworkCompatibleVersion(const char *version, bool extended = false);
 
 /* From network_command.cpp */
 /**
@@ -161,7 +162,7 @@ void NetworkFreeLocalCommandQueue();
 void NetworkSyncCommandQueue(NetworkClientSocket *cs);
 
 void NetworkError(StringID error_string);
-void NetworkTextMessage(NetworkAction action, TextColour colour, bool self_send, const char *name, const char *str = "", int64 data = 0);
+void NetworkTextMessage(NetworkAction action, TextColour colour, bool self_send, const char *name, const char *str = "", NetworkTextMessageData data = NetworkTextMessageData());
 uint NetworkCalculateLag(const NetworkClientSocket *cs);
 StringID GetNetworkErrorMsg(NetworkErrorCode err);
 bool NetworkFindName(char *new_name, const char *last);

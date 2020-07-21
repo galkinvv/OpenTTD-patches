@@ -19,8 +19,32 @@
 #include "widgets/smallmap_widget.h"
 #include "guitimer_func.h"
 
+static const int NUM_NO_COMPANY_ENTRIES = 4; ///< Number of entries in the owner legend that are not companies.
+
+/** Mapping of tile type to importance of the tile (higher number means more interesting to show). */
+static const byte _tiletype_importance[] = {
+	2, // MP_CLEAR
+	8, // MP_RAILWAY
+	7, // MP_ROAD
+	5, // MP_HOUSE
+	2, // MP_TREES
+	9, // MP_STATION
+	2, // MP_WATER
+	1, // MP_VOID
+	6, // MP_INDUSTRY
+	8, // MP_TUNNELBRIDGE
+	2, // MP_OBJECT
+	0,
+};
+
 /* set up the cargos to be displayed in the smallmap's route legend */
 void BuildLinkStatsLegend();
+
+struct TunnelBridgeToMap {
+	TileIndex from_tile;
+	TileIndex to_tile;
+};
+typedef std::vector<TunnelBridgeToMap> TunnelBridgeToMapVector;
 
 void BuildIndustriesLegend();
 void ShowSmallMap();
@@ -66,7 +90,7 @@ protected:
 
 	static const uint LEGEND_BLOB_WIDTH = 8;              ///< Width of the coloured blob in front of a line text in the #WID_SM_LEGEND widget.
 	static const uint INDUSTRY_MIN_NUMBER_OF_COLUMNS = 2; ///< Minimal number of columns in the #WID_SM_LEGEND widget for the #SMT_INDUSTRY legend.
-	static const uint FORCE_REFRESH_PERIOD = 930; ///< map is redrawn after that many milliseconds.
+	static const uint FORCE_REFRESH_PERIOD = 2850; ///< map is redrawn after that many milliseconds.
 	static const uint BLINK_PERIOD         = 450; ///< highlight blinking interval in milliseconds.
 
 	uint min_number_of_columns;    ///< Minimal number of columns in legends.
@@ -147,7 +171,6 @@ protected:
 		return Company::IsValidID(_local_company) ? 1U << _local_company : 0xffffffff;
 	}
 
-	void RebuildColourIndexIfNecessary();
 	uint GetNumberRowsLegend(uint columns) const;
 	void SelectLegendItem(int click_pos, LegendAndColour *legend, int end_legend_item, int begin_legend_item = 0);
 	void SwitchMapType(SmallMapType map_type);
@@ -157,7 +180,7 @@ protected:
 	void DrawSmallMapColumn(void *dst, uint xc, uint yc, int pitch, int reps, int start_pos, int end_pos, Blitter *blitter) const;
 	void DrawVehicles(const DrawPixelInfo *dpi, Blitter *blitter) const;
 	void DrawTowns(const DrawPixelInfo *dpi) const;
-	void DrawSmallMap(DrawPixelInfo *dpi) const;
+	void DrawSmallMap(DrawPixelInfo *dpi, bool draw_indicators = true) const;
 
 	Point RemapTile(int tile_x, int tile_y) const;
 	Point PixelToTile(int px, int py, int *sub, bool add_sub = true) const;
@@ -175,6 +198,8 @@ public:
 	SmallMapWindow(WindowDesc *desc, int window_number);
 	virtual ~SmallMapWindow();
 
+	static void RebuildColourIndexIfNecessary();
+
 	void SmallMapCenterOnCurrentPos();
 	Point GetStationMiddle(const Station *st) const;
 
@@ -189,6 +214,9 @@ public:
 	void OnRealtimeTick(uint delta_ms) override;
 	void OnScroll(Point delta) override;
 	void OnMouseOver(Point pt, int widget) override;
+
+	void TakeScreenshot();
+	void ScreenshotCallbackHandler(void *buf, uint y, uint pitch, uint n);
 };
 
 #endif /* SMALLMAP_GUI_H */

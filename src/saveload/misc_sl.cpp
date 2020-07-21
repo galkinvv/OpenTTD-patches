@@ -16,6 +16,8 @@
 #include "../gfx_func.h"
 #include "../core/random_func.hpp"
 #include "../fios.h"
+#include "../road_type.h"
+#include "../core/checksum_func.hpp"
 
 #include "saveload.h"
 
@@ -73,6 +75,7 @@ static const SaveLoadGlobVarList _date_desc[] = {
 	SLEG_CONDVAR(_date,                   SLE_INT32,                  SLV_31, SL_MAX_VERSION),
 	    SLEG_VAR(_date_fract,             SLE_UINT16),
 	    SLEG_VAR(_tick_counter,           SLE_UINT16),
+	SLEG_CONDVAR_X(_tick_skip_counter,    SLE_UINT8,                   SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_VARIABLE_DAY_LENGTH)),
 	SLE_CONDNULL(2, SL_MIN_VERSION, SLV_157), // _vehicle_id_ctr_day
 	SLEG_CONDVAR(_age_cargo_skip_counter, SLE_UINT8,                   SL_MIN_VERSION, SLV_162),
 	SLE_CONDNULL(1, SL_MIN_VERSION, SLV_46),
@@ -82,6 +85,7 @@ static const SaveLoadGlobVarList _date_desc[] = {
 	SLE_CONDNULL(2, SL_MIN_VERSION, SLV_120),
 	    SLEG_VAR(_random.state[0],        SLE_UINT32),
 	    SLEG_VAR(_random.state[1],        SLE_UINT32),
+	SLEG_CONDVAR_X(_state_checksum.state, SLE_UINT64,         SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_STATE_CHECKSUM)),
 	SLE_CONDNULL(1,  SL_MIN_VERSION,  SLV_10),
 	SLE_CONDNULL(4, SLV_10, SLV_120),
 	    SLEG_VAR(_cur_company_tick_index, SLE_FILE_U8  | SLE_VAR_U32),
@@ -89,6 +93,8 @@ static const SaveLoadGlobVarList _date_desc[] = {
 	SLEG_CONDVAR(_next_competitor_start,  SLE_UINT32,                SLV_109, SL_MAX_VERSION),
 	    SLEG_VAR(_trees_tick_ctr,         SLE_UINT8),
 	SLEG_CONDVAR(_pause_mode,             SLE_UINT8,                   SLV_4, SL_MAX_VERSION),
+	SLEG_CONDVAR_X(_game_events_overall,  SLE_UINT32,         SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_GAME_EVENTS)),
+	SLEG_CONDVAR_X(_road_layout_change_counter, SLE_UINT32,   SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_ROAD_LAYOUT_CHANGE_CTR)),
 	SLE_CONDNULL(4, SLV_11, SLV_120),
 	    SLEG_END()
 };
@@ -98,6 +104,7 @@ static const SaveLoadGlobVarList _date_check_desc[] = {
 	SLEG_CONDVAR(_load_check_data.current_date,  SLE_INT32,                  SLV_31, SL_MAX_VERSION),
 	    SLE_NULL(2),                       // _date_fract
 	    SLE_NULL(2),                       // _tick_counter
+	SLE_CONDNULL_X(1, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_VARIABLE_DAY_LENGTH)), // _tick_skip_counter
 	SLE_CONDNULL(2, SL_MIN_VERSION, SLV_157),               // _vehicle_id_ctr_day
 	SLE_CONDNULL(1, SL_MIN_VERSION, SLV_162),               // _age_cargo_skip_counter
 	SLE_CONDNULL(1, SL_MIN_VERSION, SLV_46),
@@ -107,6 +114,7 @@ static const SaveLoadGlobVarList _date_check_desc[] = {
 	SLE_CONDNULL(2, SL_MIN_VERSION, SLV_120),
 	    SLE_NULL(4),                       // _random.state[0]
 	    SLE_NULL(4),                       // _random.state[1]
+	SLE_CONDNULL_X(8, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_STATE_CHECKSUM)), // _state_checksum.state
 	SLE_CONDNULL(1,  SL_MIN_VERSION,  SLV_10),
 	SLE_CONDNULL(4, SLV_10, SLV_120),
 	    SLE_NULL(1),                       // _cur_company_tick_index
@@ -114,6 +122,8 @@ static const SaveLoadGlobVarList _date_check_desc[] = {
 	SLE_CONDNULL(4, SLV_109, SL_MAX_VERSION),  // _next_competitor_start
 	    SLE_NULL(1),                       // _trees_tick_ctr
 	SLE_CONDNULL(1, SLV_4, SL_MAX_VERSION),    // _pause_mode
+	SLE_CONDNULL_X(4, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_GAME_EVENTS)), // _game_events_overall
+	SLE_CONDNULL_X(4, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_ROAD_LAYOUT_CHANGE_CTR)), // _road_layout_change_counter
 	SLE_CONDNULL(4, SLV_11, SLV_120),
 	    SLEG_END()
 };
@@ -123,6 +133,7 @@ static const SaveLoadGlobVarList _date_check_desc[] = {
 static void SaveLoad_DATE()
 {
 	SlGlobList(_date_desc);
+	SetScaledTickVariables();
 }
 
 static void Check_DATE()

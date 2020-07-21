@@ -19,6 +19,7 @@
 #include "strings_type.h"
 #include "date_type.h"
 #include "signal_type.h"
+#include "rail_map.h"
 #include "settings_type.h"
 
 /** Railtype flags. */
@@ -304,7 +305,7 @@ public:
 static inline const RailtypeInfo *GetRailTypeInfo(RailType railtype)
 {
 	extern RailtypeInfo _railtypes[RAILTYPE_END];
-	assert(railtype < RAILTYPE_END);
+	assert_msg(railtype < RAILTYPE_END, "%u", railtype);
 	return &_railtypes[railtype];
 }
 
@@ -362,6 +363,21 @@ static inline bool Rail90DegTurnDisallowed(RailType rt1, RailType rt2, bool def 
 	bool rt2_90deg = HasBit(rti2->flags, RTF_DISALLOW_90DEG) || (!HasBit(rti2->flags, RTF_ALLOW_90DEG) && def);
 
 	return rt1_90deg || rt2_90deg;
+}
+
+static inline bool Rail90DegTurnDisallowedTilesFromDiagDir(TileIndex t1, TileIndex t2, DiagDirection t1_towards_t2, bool def = _settings_game.pf.forbid_90_deg)
+{
+	return Rail90DegTurnDisallowed(GetTileRailTypeByEntryDir(t1, ReverseDiagDir(t1_towards_t2)), GetTileRailTypeByEntryDir(t2, t1_towards_t2), def);
+}
+
+static inline bool Rail90DegTurnDisallowedAdjacentTiles(TileIndex t1, TileIndex t2, bool def = _settings_game.pf.forbid_90_deg)
+{
+	return Rail90DegTurnDisallowedTilesFromDiagDir(t1, t2, DiagdirBetweenTiles(t1, t2));
+}
+
+static inline bool Rail90DegTurnDisallowedTilesFromTrackdir(TileIndex t1, TileIndex t2, Trackdir t1_td, bool def = _settings_game.pf.forbid_90_deg)
+{
+	return Rail90DegTurnDisallowedTilesFromDiagDir(t1, t2, TrackdirToExitdir(t1_td));
 }
 
 /**
@@ -440,6 +456,8 @@ static inline Money SignalMaintenanceCost(uint32 num)
 	return (_price[PR_INFRASTRUCTURE_RAIL] * 15 * num * (1 + IntSqrt(num))) >> 8; // 1 bit fraction for the multiplier and 7 bits scaling.
 }
 
+void MarkSingleSignalDirty(TileIndex tile, Trackdir td);
+
 void DrawTrainDepotSprite(int x, int y, int image, RailType railtype);
 int TicksToLeaveDepot(const Train *v);
 
@@ -469,5 +487,17 @@ extern RailTypes _railtypes_hidden_mask;
  * @param var Railtype.
  */
 #define FOR_ALL_SORTED_RAILTYPES(var) for (uint8 index = 0; index < _sorted_railtypes.size() && (var = _sorted_railtypes[index], true) ; index++)
+
+/** Enum holding the signal offset in the sprite sheet according to the side it is representing. */
+enum SignalOffsets {
+	SIGNAL_TO_SOUTHWEST,
+	SIGNAL_TO_NORTHEAST,
+	SIGNAL_TO_SOUTHEAST,
+	SIGNAL_TO_NORTHWEST,
+	SIGNAL_TO_EAST,
+	SIGNAL_TO_WEST,
+	SIGNAL_TO_SOUTH,
+	SIGNAL_TO_NORTH,
+};
 
 #endif /* RAIL_H */

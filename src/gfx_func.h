@@ -21,7 +21,7 @@
  * (this is btw. also possible if needed). This is used to avoid a
  * flickering of the screen by the video driver constantly repainting it.
  *
- * This whole mechanism is controlled by an rectangle defined in #_invalid_rect. This
+ * This whole mechanism was controlled by an rectangle defined in #_invalid_rect. This
  * rectangle defines the area on the screen which must be repaint. If a new object
  * needs to be repainted this rectangle is extended to 'catch' the object on the
  * screen. At some point (which is normally uninteresting for patch writers) this
@@ -32,7 +32,6 @@
  * rectangle information. Then a new round begins by marking objects "dirty".
  *
  * @see VideoDriver::MakeDirty
- * @see _invalid_rect
  * @see _screen
  */
 
@@ -45,6 +44,7 @@
 #include "string_type.h"
 
 void GameLoop();
+void GameLoopPaletteAnimations();
 
 void CreateConsole();
 
@@ -54,6 +54,8 @@ extern byte _support8bpp;
 extern CursorVars _cursor;
 extern bool _ctrl_pressed;   ///< Is Ctrl pressed?
 extern bool _shift_pressed;  ///< Is Shift pressed?
+extern bool _invert_ctrl;
+extern bool _invert_shift;
 extern byte _fast_forward;
 
 extern bool _left_button_down;
@@ -71,6 +73,7 @@ extern Palette _cur_palette; ///< Current palette
 void HandleKeypress(uint keycode, WChar key);
 void HandleTextInput(const char *str, bool marked = false, const char *caret = nullptr, const char *insert_location = nullptr, const char *replacement_end = nullptr);
 void HandleCtrlChanged();
+void HandleShiftChanged();
 void HandleMouseEvents();
 void UpdateWindows();
 
@@ -83,7 +86,6 @@ void UndrawMouseCursor();
 static const int DRAW_STRING_BUFFER = 2048;
 
 void RedrawScreenRect(int left, int top, int right, int bottom);
-void GfxScroll(int left, int top, int width, int height, int xo, int yo);
 
 Dimension GetSpriteSize(SpriteID sprid, Point *offset = nullptr, ZoomLevel zoom = ZOOM_LVL_GUI);
 void DrawSpriteViewport(SpriteID img, PaletteID pal, int x, int y, const SubSprite *sub = nullptr);
@@ -131,7 +133,9 @@ Point GetCharPosInString(const char *str, const char *ch, FontSize start_fontsiz
 const char *GetCharAtPosition(const char *str, int x, FontSize start_fontsize = FS_NORMAL);
 
 void DrawDirtyBlocks();
-void AddDirtyBlock(int left, int top, int right, int bottom);
+void SetDirtyBlocks(int left, int top, int right, int bottom);
+void SetPendingDirtyBlocks(int left, int top, int right, int bottom);
+void UnsetDirtyBlocks(int left, int top, int right, int bottom);
 void MarkWholeScreenDirty();
 
 void GfxInitPalettes();
@@ -168,7 +172,17 @@ byte GetCharacterWidth(FontSize size, WChar key);
 byte GetDigitWidth(FontSize size = FS_NORMAL);
 void GetBroadestDigit(uint *front, uint *next, FontSize size = FS_NORMAL);
 
-int GetCharacterHeight(FontSize size);
+extern int font_height_cache[FS_END];
+
+/**
+ * Get height of a character for a given font size.
+ * @param size Font size to get height of
+ * @return     Height of characters in the given font (pixels)
+ */
+inline int GetCharacterHeight(FontSize size)
+{
+	return font_height_cache[size];
+}
 
 /** Height of characters in the small (#FS_SMALL) font. @note Some characters may be oversized. */
 #define FONT_HEIGHT_SMALL  (GetCharacterHeight(FS_SMALL))
@@ -224,10 +238,4 @@ static const uint8 PC_VERY_DARK_BLUE     = 0x9A;           ///< Almost-black blu
 static const uint8 PC_DARK_BLUE          = 0x9D;           ///< Dark blue palette colour.
 static const uint8 PC_LIGHT_BLUE         = 0x98;           ///< Light blue palette colour.
 
-static const uint8 PC_ROUGH_LAND         = 0x52;           ///< Dark green palette colour for rough land.
-static const uint8 PC_GRASS_LAND         = 0x54;           ///< Dark green palette colour for grass land.
-static const uint8 PC_BARE_LAND          = 0x37;           ///< Brown palette colour for bare land.
-static const uint8 PC_FIELDS             = 0x25;           ///< Light brown palette colour for fields.
-static const uint8 PC_TREES              = 0x57;           ///< Green palette colour for trees.
-static const uint8 PC_WATER              = 0xC9;           ///< Dark blue palette colour for water.
 #endif /* GFX_FUNC_H */

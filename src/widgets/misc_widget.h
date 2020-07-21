@@ -24,6 +24,8 @@ enum ToolTipsWidgets {
 enum AboutWidgets {
 	WID_A_SCROLLING_TEXT, ///< The actually scrolling text.
 	WID_A_WEBSITE,        ///< URL of OpenTTD website.
+	WID_A_WEBSITE1,       ///< URL of patchpack thread.
+	WID_A_WEBSITE2,       ///< URL of patchpack github.
 	WID_A_COPYRIGHT,      ///< Copyright string
 };
 
@@ -52,6 +54,12 @@ enum TextfileWidgets {
 	WID_TF_BACKGROUND, ///< Panel to draw the textfile on.
 	WID_TF_VSCROLLBAR, ///< Vertical scrollbar to scroll through the textfile up-and-down.
 	WID_TF_HSCROLLBAR, ///< Horizontal scrollbar to scroll through the textfile left-to-right.
+};
+
+/** Widgets of the #TextfileWindow class. */
+enum ModifierKeyToggleWidgets {
+	WID_MKT_SHIFT,
+	WID_MKT_CTRL,
 };
 
 #endif /* WIDGETS_MISC_WIDGET_H */

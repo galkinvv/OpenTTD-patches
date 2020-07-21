@@ -12,6 +12,7 @@
 #include "../../viewport_func.h"
 #include "../../ship.h"
 #include "../../roadstop_base.h"
+#include "../../infrastructure_func.h"
 #include "../../vehicle_func.h"
 #include "../pathfinder_func.h"
 #include "../pathfinder_type.h"
@@ -286,14 +287,14 @@ static void NPFMarkTile(TileIndex tile)
 			/* DEBUG: mark visited tiles by mowing the grass under them ;-) */
 			if (!IsRailDepot(tile)) {
 				SetRailGroundType(tile, RAIL_GROUND_BARREN);
-				MarkTileDirtyByTile(tile);
+				MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 			}
 			break;
 
 		case MP_ROAD:
 			if (!IsRoadDepot(tile)) {
 				SetRoadside(tile, ROADSIDE_BARREN);
-				MarkTileDirtyByTile(tile);
+				MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 			}
 			break;
 
@@ -306,7 +307,7 @@ static Vehicle *CountShipProc(Vehicle *v, void *data)
 {
 	uint *count = (uint *)data;
 	/* Ignore other vehicles (aircraft) and ships inside depot. */
-	if (v->type == VEH_SHIP && (v->vehstatus & VS_HIDDEN) == 0) (*count)++;
+	if ((v->vehstatus & VS_HIDDEN) == 0) (*count)++;
 
 	return nullptr;
 }
@@ -330,7 +331,7 @@ static int32 NPFWaterPathCost(AyStar *as, AyStarNode *current, OpenListNode *par
 	if (IsDockingTile(current->tile)) {
 		/* Check docking tile for occupancy */
 		uint count = 1;
-		HasVehicleOnPos(current->tile, &count, &CountShipProc);
+		HasVehicleOnPos(current->tile, VEH_SHIP, &count, &CountShipProc);
 		cost += count * 3 * _trackdir_length[trackdir];
 	}
 
@@ -692,25 +693,31 @@ static void NPFSaveTargetData(AyStar *as, OpenListNode *current)
  */
 static bool CanEnterTileOwnerCheck(Owner owner, TileIndex tile, DiagDirection enterdir)
 {
-	if (IsTileType(tile, MP_RAILWAY) || // Rail tile (also rail depot)
-			HasStationTileRail(tile) ||     // Rail station tile/waypoint
-			IsRoadDepotTile(tile) ||        // Road depot tile
-			IsStandardRoadStopTile(tile)) { // Road station tile (but not drive-through stops)
-		return IsTileOwner(tile, owner);  // You need to own these tiles entirely to use them
-	}
-
 	switch (GetTileType(tile)) {
+		case MP_RAILWAY:
+			return IsInfraTileUsageAllowed(VEH_TRAIN, owner, tile); // Rail tile (also rail depot)
+
 		case MP_ROAD:
 			/* rail-road crossing : are we looking at the railway part? */
 			if (IsLevelCrossing(tile) &&
 					DiagDirToAxis(enterdir) != GetCrossingRoadAxis(tile)) {
-				return IsTileOwner(tile, owner); // Railway needs owner check, while the street is public
+				return IsInfraTileUsageAllowed(VEH_TRAIN, owner, tile); // Railway needs owner check, while the street is public
+			} else if (IsRoadDepot(tile)) { // Road depot tile
+				return IsInfraTileUsageAllowed(VEH_ROAD, owner, tile);
+			}
+			break;
+
+		case MP_STATION:
+			if (HasStationRail(tile)) { // Rail station tile/waypoint
+				return IsInfraTileUsageAllowed(VEH_TRAIN, owner, tile);
+			} else if (IsStandardRoadStopTile(tile)) { // Road station tile (but not drive-through stops)
+				return IsInfraTileUsageAllowed(VEH_ROAD, owner, tile);
 			}
 			break;
 
 		case MP_TUNNELBRIDGE:
 			if (GetTunnelBridgeTransportType(tile) == TRANSPORT_RAIL) {
-				return IsTileOwner(tile, owner);
+				return IsInfraTileUsageAllowed(VEH_TRAIN, owner, tile);
 			}
 			break;
 
@@ -809,7 +816,7 @@ static bool CanEnterTile(TileIndex tile, DiagDirection dir, AyStarUserData *user
 	/* check correct rail type (mono, maglev, etc) */
 	switch (user->type) {
 		case TRANSPORT_RAIL: {
-			RailType rail_type = GetTileRailType(tile);
+			RailType rail_type = GetTileRailTypeByEntryDir(tile, dir);
 			if (!HasBit(user->railtypes, rail_type)) return false;
 			break;
 		}
@@ -870,7 +877,7 @@ static TrackdirBits GetDriveableTrackdirBits(TileIndex dst_tile, TileIndex src_t
 	trackdirbits &= TrackdirReachesTrackdirs(src_trackdir);
 
 	/* Filter out trackdirs that would make 90 deg turns for trains */
-	if (type == TRANSPORT_RAIL && Rail90DegTurnDisallowed(GetTileRailType(src_tile), GetTileRailType(dst_tile))) {
+	if (type == TRANSPORT_RAIL && Rail90DegTurnDisallowedTilesFromTrackdir(src_tile, dst_tile, src_trackdir)) {
 		trackdirbits &= ~TrackdirCrossesTrackdirs(src_trackdir);
 	}
 
@@ -973,6 +980,10 @@ static void NPFFollowTrack(AyStar *aystar, OpenListNode *current)
 				/* If there's a one-way signal not pointing towards us, stop going in this direction. */
 				break;
 			}
+		}
+		if (IsTileType(dst_tile, MP_TUNNELBRIDGE) && IsTunnelBridgeSignalSimulationExitOnly(dst_tile) && DiagDirToDiagTrackdir(GetTunnelBridgeDirection(dst_tile)) == dst_trackdir) {
+			/* Entering a signalled bridge/tunnel from the wrong side, equivalent to encountering a one-way signal from the wrong side */
+			break;
 		}
 		{
 			/* We've found ourselves a neighbour :-) */
@@ -1205,13 +1216,12 @@ Track NPFShipChooseTrack(const Ship *v, bool &path_found)
 	AyStarUserData user = { v->owner, TRANSPORT_WATER, RAILTYPES_NONE, ROADTYPES_NONE, 0 };
 	NPFFoundTargetData ftd = NPFRouteToStationOrTile(v->tile, trackdir, true, &fstd, &user);
 
-	assert(ftd.best_trackdir != INVALID_TRACKDIR);
-
 	/* If ftd.best_bird_dist is 0, we found our target and ftd.best_trackdir contains
 	 * the direction we need to take to get there, if ftd.best_bird_dist is not 0,
 	 * we did not find our target, but ftd.best_trackdir contains the direction leading
 	 * to the tile closest to our target. */
 	path_found = (ftd.best_bird_dist == 0);
+	if (ftd.best_trackdir == INVALID_TRACKDIR) return INVALID_TRACK;
 	return TrackdirToTrack(ftd.best_trackdir);
 }
 

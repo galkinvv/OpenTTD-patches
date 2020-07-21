@@ -117,7 +117,7 @@ struct GRFError {
 	std::string data;           ///< Additional data for message and custom_message
 	StringID message;           ///< Default message
 	StringID severity;          ///< Info / Warning / Error / Fatal
-	uint32 param_value[2];      ///< Values of GRF parameters to show for message and custom_message
+	uint64 param_value[4];      ///< Values of GRF parameters to show for message and custom_message
 };
 
 /** The possible types of a newgrf parameter. */
@@ -157,6 +157,7 @@ struct GRFConfig : ZeroedMemoryAllocator {
 	GRFIdentifier ident;                        ///< grfid and md5sum to uniquely identify newgrfs
 	uint8 original_md5sum[16];                  ///< MD5 checksum of original file if only a 'compatible' file was loaded
 	char *filename;                             ///< Filename - either with or without full path
+	char *full_filename;                        ///< NOSAVE: Full filename
 	GRFTextWrapper name;                        ///< NOSAVE: GRF name (Action 0x08)
 	GRFTextWrapper info;                        ///< NOSAVE: GRF info (author, copyright, ...) (Action 0x08)
 	GRFTextWrapper url;                         ///< NOSAVE: URL belonging to this GRF.
@@ -183,6 +184,11 @@ struct GRFConfig : ZeroedMemoryAllocator {
 	const char *GetDescription() const;
 	const char *GetURL() const;
 
+	const char *GetDisplayPath() const
+	{
+		return this->full_filename ? this->full_filename : this->filename;
+	}
+
 	void SetParameterDefaults();
 	void SetSuitablePalette();
 	void FinalizeParameterInfo();
@@ -202,6 +208,8 @@ extern GRFConfig *_grfconfig;         ///< First item in list of current GRF set
 extern GRFConfig *_grfconfig_newgame; ///< First item in list of default GRF set up
 extern GRFConfig *_grfconfig_static;  ///< First item in list of static GRF set up
 extern uint _missing_extra_graphics;  ///< Number of sprites provided by the fallback extra GRF, i.e. missing in the baseset.
+
+extern bool _grf_bug_too_many_strings;///< NewGRF bug: Insufficient available string IDs for GRFs
 
 /** Callback for NewGRF scanning. */
 struct NewGRFScanCallback {

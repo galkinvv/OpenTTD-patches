@@ -16,9 +16,16 @@
 #include "newgrf_spritegroup.h"
 #include "newgrf_town.h"
 
-/** Scope resolver for houses. */
-struct HouseScopeResolver : public ScopeResolver {
+struct CommonHouseScopeResolver : public ScopeResolver {
 	HouseID house_id;              ///< Type of house being queried.
+
+	CommonHouseScopeResolver(ResolverObject &ro, HouseID house_id)
+		: ScopeResolver(ro), house_id(house_id)
+	{ }
+};
+
+/** Scope resolver for houses. */
+struct HouseScopeResolver : public CommonHouseScopeResolver {
 	TileIndex tile;                ///< Tile of this house.
 	Town *town;                    ///< Town of this house.
 	bool not_yet_constructed;      ///< True for construction check.
@@ -37,7 +44,7 @@ struct HouseScopeResolver : public ScopeResolver {
 	 */
 	HouseScopeResolver(ResolverObject &ro, HouseID house_id, TileIndex tile, Town *town,
 			bool not_yet_constructed, uint8 initial_random_bits, CargoTypes watched_cargo_triggers)
-		: ScopeResolver(ro), house_id(house_id), tile(tile), town(town), not_yet_constructed(not_yet_constructed),
+		: CommonHouseScopeResolver(ro, house_id), tile(tile), town(town), not_yet_constructed(not_yet_constructed),
 		initial_random_bits(initial_random_bits), watched_cargo_triggers(watched_cargo_triggers)
 	{
 	}
@@ -45,6 +52,25 @@ struct HouseScopeResolver : public ScopeResolver {
 	uint32 GetRandomBits() const override;
 	uint32 GetVariable(byte variable, uint32 parameter, bool *available) const override;
 	uint32 GetTriggers() const override;
+};
+
+/**
+ * Fake scope resolver for nonexistent houses.
+ *
+ * The purpose of this class is to provide a house resolver for a given house type
+ * but not an actual house instatntion. We need this when e.g. drawing houses in
+ * GUI to keep backward compatibility with GRFs that were created before this
+ * functionality. When querying house sprites, certain GRF may read various house
+ * variables e.g. the town zone where the building is located or the XY coordinates.
+ * Since the building doesn't exists we have no real values that we can return.
+ * Instead of failing, this resolver will return fake values.
+ */
+struct FakeHouseScopeResolver : public CommonHouseScopeResolver {
+	FakeHouseScopeResolver(ResolverObject &ro, HouseID house_id)
+		: CommonHouseScopeResolver(ro, house_id)
+	{ }
+
+	/* virtual */ uint32 GetVariable(byte variable, uint32 parameter, bool *available) const;
 };
 
 /** Resolver object to be used for houses (feature 07 spritegroups). */
@@ -55,6 +81,27 @@ struct HouseResolverObject : public ResolverObject {
 	HouseResolverObject(HouseID house_id, TileIndex tile, Town *town,
 			CallbackID callback = CBID_NO_CALLBACK, uint32 param1 = 0, uint32 param2 = 0,
 			bool not_yet_constructed = false, uint8 initial_random_bits = 0, CargoTypes watched_cargo_triggers = 0);
+
+	ScopeResolver *GetScope(VarSpriteGroupScope scope = VSG_SCOPE_SELF, byte relative = 0) override
+	{
+		switch (scope) {
+			case VSG_SCOPE_SELF:   return &this->house_scope;
+			case VSG_SCOPE_PARENT: return &this->town_scope;
+			default: return ResolverObject::GetScope(scope, relative);
+		}
+	}
+
+	GrfSpecFeature GetFeature() const override;
+	uint32 GetDebugID() const override;
+};
+
+/** Resolver object to be used for fake houses (feature 07 spritegroups). */
+struct FakeHouseResolverObject : public ResolverObject {
+	FakeHouseScopeResolver house_scope;
+	FakeTownScopeResolver  town_scope;
+
+	FakeHouseResolverObject(HouseID house_id,
+			CallbackID callback = CBID_NO_CALLBACK, uint32 param1 = 0, uint32 param2 = 0);
 
 	ScopeResolver *GetScope(VarSpriteGroupScope scope = VSG_SCOPE_SELF, byte relative = 0) override
 	{
@@ -94,13 +141,15 @@ void IncreaseBuildingCount(Town *t, HouseID house_id);
 void DecreaseBuildingCount(Town *t, HouseID house_id);
 
 void DrawNewHouseTile(TileInfo *ti, HouseID house_id);
+void DrawNewHouseTileInGUI(int x, int y, HouseID house_id, bool ground);
 void AnimateNewHouseTile(TileIndex tile);
 void AnimateNewHouseConstruction(TileIndex tile);
 
-uint16 GetHouseCallback(CallbackID callback, uint32 param1, uint32 param2, HouseID house_id, Town *town, TileIndex tile,
+uint16 GetHouseCallback(CallbackID callback, uint32 param1, uint32 param2, HouseID house_id, Town *town = nullptr, TileIndex tile = INVALID_TILE,
 		bool not_yet_constructed = false, uint8 initial_random_bits = 0, CargoTypes watched_cargo_triggers = 0);
 void WatchedCargoCallback(TileIndex tile, CargoTypes trigger_cargoes);
 
+bool HouseAllowsConstruction(HouseID house_id, TileIndex tile, Town *t, byte random_bits);
 bool CanDeleteHouse(TileIndex tile);
 
 bool NewHouseTileLoop(TileIndex tile);

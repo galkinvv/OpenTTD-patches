@@ -23,6 +23,7 @@
 #include "cmd_helper.h"
 #include "tunnelbridge_map.h"
 #include "road_gui.h"
+#include "tilehighlight_func.h"
 
 #include "widgets/bridge_widget.h"
 
@@ -72,6 +73,8 @@ void CcBuildBridge(const CommandCost &result, TileIndex end_tile, uint32 p1, uin
 		DiagDirection start_direction = ReverseDiagDir(GetTunnelBridgeDirection(p1));
 		ConnectRoadToStructure(p1, start_direction);
 	}
+
+	StoreRailPlacementEndpoints(p1, end_tile, (TileX(p1) == TileX(end_tile)) ? TRACK_Y : TRACK_X, false);
 }
 
 /** Window class for handling the bridge-build GUI. */
@@ -387,15 +390,19 @@ void ShowBuildBridgeWindow(TileIndex start, TileIndex end, TransportType transpo
 		return;
 	}
 
-	/* only query bridge building possibility once, result is the same for all bridges!
+	/* only query bridge building possibility once, result is the same for all bridges,
+	 * unless the result is bridge too low for station or pillars obstruct station, in which case it is bridge-type dependent.
 	 * returns CMD_ERROR on failure, and price on success */
 	StringID errmsg = INVALID_STRING_ID;
 	CommandCost ret = DoCommand(end, start, type, CommandFlagsToDCFlags(GetCommandFlags(CMD_BUILD_BRIDGE)) | DC_QUERY_COST, CMD_BUILD_BRIDGE);
 
+	const bool query_per_bridge_type = ret.Failed() && (ret.GetErrorMessage() == STR_ERROR_BRIDGE_TOO_LOW_FOR_STATION || ret.GetErrorMessage() == STR_ERROR_BRIDGE_PILLARS_OBSTRUCT_STATION);
+
 	GUIBridgeList *bl = nullptr;
 	if (ret.Failed()) {
 		errmsg = ret.GetErrorMessage();
-	} else {
+	}
+	if (ret.Succeeded() || query_per_bridge_type) {
 		/* check which bridges can be built */
 		const uint tot_bridgedata_len = CalcBridgeLenCostFactor(bridge_len + 2);
 
@@ -432,6 +439,8 @@ void ShowBuildBridgeWindow(TileIndex start, TileIndex end, TransportType transpo
 		for (BridgeType brd_type = 0; brd_type != MAX_BRIDGES; brd_type++) {
 			type_check = CheckBridgeAvailability(brd_type, bridge_len);
 			if (type_check.Succeeded()) {
+				/* Re-check bridge building possibility is initial bridge builindg query indicated a bridge type dependent failure */
+				if (query_per_bridge_type && DoCommand(end, start, type | brd_type, CommandFlagsToDCFlags(GetCommandFlags(CMD_BUILD_BRIDGE)) | DC_QUERY_COST, CMD_BUILD_BRIDGE).Failed()) continue;
 				/* bridge is accepted, add to list */
 				/*C++17: BuildBridgeData &item = */ bl->emplace_back();
 				BuildBridgeData &item = bl->back();

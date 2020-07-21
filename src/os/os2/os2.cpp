@@ -215,3 +215,10 @@ void OSOpenBrowser(const char *url)
 void SetCurrentThreadName(const char *)
 {
 }
+
+int GetCurrentThreadName(char *str, const char *last) { return 0; }
+
+void SetSelfAsMainThread() { }
+
+bool IsMainThread() { return false; }
+bool IsNonMainThread() { return false; }

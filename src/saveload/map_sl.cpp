@@ -10,15 +10,20 @@
 #include "../stdafx.h"
 #include "../map_func.h"
 #include "../core/bitmath_func.hpp"
+#include "../core/endian_func.hpp"
+#include "../core/endian_type.hpp"
 #include "../fios.h"
 #include <array>
 
 #include "saveload.h"
+#include "saveload_buffer.h"
 
 #include "../safeguards.h"
 
 static uint32 _map_dim_x;
 static uint32 _map_dim_y;
+
+extern bool _sl_maybe_chillpp;
 
 static const SaveLoadGlobVarList _map_dimensions[] = {
 	SLEG_CONDVAR(_map_dim_x, SLE_UINT32, SLV_6, SL_MAX_VERSION),
@@ -36,6 +41,9 @@ static void Save_MAPS()
 static void Load_MAPS()
 {
 	SlGlobList(_map_dimensions);
+	if (!ValidateMapSize(_map_dim_x, _map_dim_y)) {
+		SlErrorCorruptFmt("Invalid map size: %u x %u", _map_dim_x, _map_dim_y);
+	}
 	AllocateMap(_map_dim_x, _map_dim_y);
 }
 
@@ -59,38 +67,44 @@ static void Load_MAPT()
 	}
 }
 
-static void Save_MAPT()
+static void Check_MAPH_common()
 {
-	std::array<byte, MAP_SL_BUF_SIZE> buf;
-	TileIndex size = MapSize();
-
-	SlSetLength(size);
-	for (TileIndex i = 0; i != size;) {
-		for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) buf[j] = _m[i++].type;
-		SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT8);
+	if (_sl_maybe_chillpp && (SlGetFieldLength() == 0 || SlGetFieldLength() == _map_dim_x * _map_dim_y * 2)) {
+		_sl_maybe_chillpp = false;
+		extern void SlXvChillPPSpecialSavegameVersions();
+		SlXvChillPPSpecialSavegameVersions();
 	}
+}
+
+static void Check_MAPH()
+{
+	Check_MAPH_common();
+	SlSkipBytes(SlGetFieldLength());
 }
 
 static void Load_MAPH()
 {
+	Check_MAPH_common();
+	if (SlXvIsFeaturePresent(XSLFI_CHILLPP)) {
+		if (SlGetFieldLength() != 0) {
+			_sl_xv_feature_versions[XSLFI_HEIGHT_8_BIT] = 2;
+			std::array<uint16, MAP_SL_BUF_SIZE> buf;
+			TileIndex size = MapSize();
+
+			for (TileIndex i = 0; i != size;) {
+				SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT16);
+				for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) _m[i++].height = buf[j];
+			}
+		}
+		return;
+	}
+
 	std::array<byte, MAP_SL_BUF_SIZE> buf;
 	TileIndex size = MapSize();
 
 	for (TileIndex i = 0; i != size;) {
 		SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT8);
 		for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) _m[i++].height = buf[j];
-	}
-}
-
-static void Save_MAPH()
-{
-	std::array<byte, MAP_SL_BUF_SIZE> buf;
-	TileIndex size = MapSize();
-
-	SlSetLength(size);
-	for (TileIndex i = 0; i != size;) {
-		for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) buf[j] = _m[i++].height;
-		SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT8);
 	}
 }
 
@@ -102,18 +116,6 @@ static void Load_MAP1()
 	for (TileIndex i = 0; i != size;) {
 		SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT8);
 		for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) _m[i++].m1 = buf[j];
-	}
-}
-
-static void Save_MAP1()
-{
-	std::array<byte, MAP_SL_BUF_SIZE> buf;
-	TileIndex size = MapSize();
-
-	SlSetLength(size);
-	for (TileIndex i = 0; i != size;) {
-		for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) buf[j] = _m[i++].m1;
-		SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT8);
 	}
 }
 
@@ -131,18 +133,6 @@ static void Load_MAP2()
 	}
 }
 
-static void Save_MAP2()
-{
-	std::array<uint16, MAP_SL_BUF_SIZE> buf;
-	TileIndex size = MapSize();
-
-	SlSetLength(size * sizeof(uint16));
-	for (TileIndex i = 0; i != size;) {
-		for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) buf[j] = _m[i++].m2;
-		SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT16);
-	}
-}
-
 static void Load_MAP3()
 {
 	std::array<byte, MAP_SL_BUF_SIZE> buf;
@@ -151,18 +141,6 @@ static void Load_MAP3()
 	for (TileIndex i = 0; i != size;) {
 		SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT8);
 		for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) _m[i++].m3 = buf[j];
-	}
-}
-
-static void Save_MAP3()
-{
-	std::array<byte, MAP_SL_BUF_SIZE> buf;
-	TileIndex size = MapSize();
-
-	SlSetLength(size);
-	for (TileIndex i = 0; i != size;) {
-		for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) buf[j] = _m[i++].m3;
-		SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT8);
 	}
 }
 
@@ -177,18 +155,6 @@ static void Load_MAP4()
 	}
 }
 
-static void Save_MAP4()
-{
-	std::array<byte, MAP_SL_BUF_SIZE> buf;
-	TileIndex size = MapSize();
-
-	SlSetLength(size);
-	for (TileIndex i = 0; i != size;) {
-		for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) buf[j] = _m[i++].m4;
-		SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT8);
-	}
-}
-
 static void Load_MAP5()
 {
 	std::array<byte, MAP_SL_BUF_SIZE> buf;
@@ -197,18 +163,6 @@ static void Load_MAP5()
 	for (TileIndex i = 0; i != size;) {
 		SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT8);
 		for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) _m[i++].m5 = buf[j];
-	}
-}
-
-static void Save_MAP5()
-{
-	std::array<byte, MAP_SL_BUF_SIZE> buf;
-	TileIndex size = MapSize();
-
-	SlSetLength(size);
-	for (TileIndex i = 0; i != size;) {
-		for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) buf[j] = _m[i++].m5;
-		SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT8);
 	}
 }
 
@@ -236,18 +190,6 @@ static void Load_MAP6()
 	}
 }
 
-static void Save_MAP6()
-{
-	std::array<byte, MAP_SL_BUF_SIZE> buf;
-	TileIndex size = MapSize();
-
-	SlSetLength(size);
-	for (TileIndex i = 0; i != size;) {
-		for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) buf[j] = _me[i++].m6;
-		SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT8);
-	}
-}
-
 static void Load_MAP7()
 {
 	std::array<byte, MAP_SL_BUF_SIZE> buf;
@@ -256,18 +198,6 @@ static void Load_MAP7()
 	for (TileIndex i = 0; i != size;) {
 		SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT8);
 		for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) _me[i++].m7 = buf[j];
-	}
-}
-
-static void Save_MAP7()
-{
-	std::array<byte, MAP_SL_BUF_SIZE> buf;
-	TileIndex size = MapSize();
-
-	SlSetLength(size);
-	for (TileIndex i = 0; i != size;) {
-		for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) buf[j] = _me[i++].m7;
-		SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT8);
 	}
 }
 
@@ -282,29 +212,102 @@ static void Load_MAP8()
 	}
 }
 
-static void Save_MAP8()
+static void Load_WMAP()
 {
-	std::array<uint16, MAP_SL_BUF_SIZE> buf;
-	TileIndex size = MapSize();
+	assert_compile(sizeof(Tile) == 8);
+	assert_compile(sizeof(TileExtended) == 4);
+	assert(_sl_xv_feature_versions[XSLFI_WHOLE_MAP_CHUNK] == 1 || _sl_xv_feature_versions[XSLFI_WHOLE_MAP_CHUNK] == 2);
 
-	SlSetLength(size * sizeof(uint16));
-	for (TileIndex i = 0; i != size;) {
-		for (uint j = 0; j != MAP_SL_BUF_SIZE; j++) buf[j] = _me[i++].m8;
-		SlArray(buf.data(), MAP_SL_BUF_SIZE, SLE_UINT16);
+	ReadBuffer *reader = ReadBuffer::GetCurrent();
+	const TileIndex size = MapSize();
+
+#if TTD_ENDIAN == TTD_LITTLE_ENDIAN
+	reader->CopyBytes((byte *) _m, size * 8);
+#else
+	for (TileIndex i = 0; i != size; i++) {
+		reader->CheckBytes(8);
+		_m[i].type = reader->RawReadByte();
+		_m[i].height = reader->RawReadByte();
+		uint16 m2 = reader->RawReadByte();
+		m2 |= ((uint16) reader->RawReadByte()) << 8;
+		_m[i].m2 = m2;
+		_m[i].m1 = reader->RawReadByte();
+		_m[i].m3 = reader->RawReadByte();
+		_m[i].m4 = reader->RawReadByte();
+		_m[i].m5 = reader->RawReadByte();
+	}
+#endif
+
+	if (_sl_xv_feature_versions[XSLFI_WHOLE_MAP_CHUNK] == 1) {
+		for (TileIndex i = 0; i != size; i++) {
+			reader->CheckBytes(2);
+			_me[i].m6 = reader->RawReadByte();
+			_me[i].m7 = reader->RawReadByte();
+		}
+	} else if (_sl_xv_feature_versions[XSLFI_WHOLE_MAP_CHUNK] == 2) {
+#if TTD_ENDIAN == TTD_LITTLE_ENDIAN
+		reader->CopyBytes((byte *) _me, size * 4);
+#else
+		for (TileIndex i = 0; i != size; i++) {
+			reader->CheckBytes(4);
+			_me[i].m6 = reader->RawReadByte();
+			_me[i].m7 = reader->RawReadByte();
+			uint16 m8 = reader->RawReadByte();
+			m8 |= ((uint16) reader->RawReadByte()) << 8;
+			_me[i].m8 = m8;
+		}
+#endif
+	} else {
+		NOT_REACHED();
 	}
 }
 
+static void Save_WMAP()
+{
+	assert_compile(sizeof(Tile) == 8);
+	assert_compile(sizeof(TileExtended) == 4);
+	assert(_sl_xv_feature_versions[XSLFI_WHOLE_MAP_CHUNK] == 2);
+
+	MemoryDumper *dumper = MemoryDumper::GetCurrent();
+	const TileIndex size = MapSize();
+	SlSetLength(size * 12);
+
+#if TTD_ENDIAN == TTD_LITTLE_ENDIAN
+	dumper->CopyBytes((byte *) _m, size * 8);
+	dumper->CopyBytes((byte *) _me, size * 4);
+#else
+	for (TileIndex i = 0; i != size; i++) {
+		dumper->CheckBytes(8);
+		dumper->RawWriteByte(_m[i].type);
+		dumper->RawWriteByte(_m[i].height);
+		dumper->RawWriteByte(GB(_m[i].m2, 0, 8));
+		dumper->RawWriteByte(GB(_m[i].m2, 8, 8));
+		dumper->RawWriteByte(_m[i].m1);
+		dumper->RawWriteByte(_m[i].m3);
+		dumper->RawWriteByte(_m[i].m4);
+		dumper->RawWriteByte(_m[i].m5);
+	}
+	for (TileIndex i = 0; i != size; i++) {
+		dumper->CheckBytes(4);
+		dumper->RawWriteByte(_me[i].m6);
+		dumper->RawWriteByte(_me[i].m7);
+		dumper->RawWriteByte(GB(_me[i].m8, 0, 8));
+		dumper->RawWriteByte(GB(_me[i].m8, 8, 8));
+	}
+#endif
+}
 
 extern const ChunkHandler _map_chunk_handlers[] = {
 	{ 'MAPS', Save_MAPS, Load_MAPS, nullptr, Check_MAPS, CH_RIFF },
-	{ 'MAPT', Save_MAPT, Load_MAPT, nullptr, nullptr,    CH_RIFF },
-	{ 'MAPH', Save_MAPH, Load_MAPH, nullptr, nullptr,    CH_RIFF },
-	{ 'MAPO', Save_MAP1, Load_MAP1, nullptr, nullptr,    CH_RIFF },
-	{ 'MAP2', Save_MAP2, Load_MAP2, nullptr, nullptr,    CH_RIFF },
-	{ 'M3LO', Save_MAP3, Load_MAP3, nullptr, nullptr,    CH_RIFF },
-	{ 'M3HI', Save_MAP4, Load_MAP4, nullptr, nullptr,    CH_RIFF },
-	{ 'MAP5', Save_MAP5, Load_MAP5, nullptr, nullptr,    CH_RIFF },
-	{ 'MAPE', Save_MAP6, Load_MAP6, nullptr, nullptr,    CH_RIFF },
-	{ 'MAP7', Save_MAP7, Load_MAP7, nullptr, nullptr,    CH_RIFF },
-	{ 'MAP8', Save_MAP8, Load_MAP8, nullptr, nullptr,    CH_RIFF | CH_LAST },
+	{ 'MAPT', nullptr,      Load_MAPT, nullptr, nullptr,       CH_RIFF },
+	{ 'MAPH', nullptr,      Load_MAPH, nullptr, Check_MAPH,    CH_RIFF },
+	{ 'MAPO', nullptr,      Load_MAP1, nullptr, nullptr,       CH_RIFF },
+	{ 'MAP2', nullptr,      Load_MAP2, nullptr, nullptr,       CH_RIFF },
+	{ 'M3LO', nullptr,      Load_MAP3, nullptr, nullptr,       CH_RIFF },
+	{ 'M3HI', nullptr,      Load_MAP4, nullptr, nullptr,       CH_RIFF },
+	{ 'MAP5', nullptr,      Load_MAP5, nullptr, nullptr,       CH_RIFF },
+	{ 'MAPE', nullptr,      Load_MAP6, nullptr, nullptr,       CH_RIFF },
+	{ 'MAP7', nullptr,      Load_MAP7, nullptr, nullptr,       CH_RIFF },
+	{ 'MAP8', nullptr,      Load_MAP8, nullptr, nullptr,       CH_RIFF },
+	{ 'WMAP', Save_WMAP,    Load_WMAP, nullptr, nullptr,       CH_RIFF | CH_LAST },
 };

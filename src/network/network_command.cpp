@@ -47,6 +47,11 @@ static CommandCallback * const _callback_table[] = {
 	/* 0x19 */ CcStartStopVehicle,
 	/* 0x1A */ CcGame,
 	/* 0x1B */ CcAddVehicleNewGroup,
+	/* 0x1C */ CcAddPlan,
+	/* 0x1D */ CcSetVirtualTrain,
+	/* 0x1E */ CcVirtualTrainWagonsMoved,
+	/* 0x1F */ CcDeleteVirtualTrain,
+	/* 0x20 */ CcAddVirtualEngine,
 };
 
 /**
@@ -54,10 +59,14 @@ static CommandCallback * const _callback_table[] = {
  * @param p The packet to append to the queue.
  * @note A new instance of the CommandPacket will be made.
  */
-void CommandQueue::Append(CommandPacket *p)
+void CommandQueue::Append(CommandPacket *p, bool move)
 {
-	CommandPacket *add = MallocT<CommandPacket>(1);
-	*add = *p;
+	CommandPacket *add = new CommandPacket();
+	if (move) {
+		*add = std::move(*p);
+	} else {
+		*add = *p;
+	}
 	add->next = nullptr;
 	if (this->first == nullptr) {
 		this->first = add;
@@ -73,8 +82,9 @@ void CommandQueue::Append(CommandPacket *p)
  * @param ignore_paused Whether to ignore commands that may not be executed while paused.
  * @return the first item in the queue.
  */
-CommandPacket *CommandQueue::Pop(bool ignore_paused)
+std::unique_ptr<CommandPacket> CommandQueue::Pop(bool ignore_paused)
 {
+
 	CommandPacket **prev = &this->first;
 	CommandPacket *ret = this->first;
 	CommandPacket *prev_item = nullptr;
@@ -90,7 +100,7 @@ CommandPacket *CommandQueue::Pop(bool ignore_paused)
 		*prev = ret->next;
 		this->count--;
 	}
-	return ret;
+	return std::unique_ptr<CommandPacket>(ret);
 }
 
 /**
@@ -111,10 +121,8 @@ CommandPacket *CommandQueue::Peek(bool ignore_paused)
 /** Free everything that is in the queue. */
 void CommandQueue::Free()
 {
-	CommandPacket *cp;
-	while ((cp = this->Pop()) != nullptr) {
-		free(cp);
-	}
+	std::unique_ptr<CommandPacket> cp;
+	while ((cp = this->Pop()) != nullptr) {}
 	assert(this->count == 0);
 }
 
@@ -132,8 +140,9 @@ static CommandQueue _local_execution_queue;
  * @param callback A callback function to call after the command is finished
  * @param text The text to pass
  * @param company The company that wants to send the command
+ * @param binary_length The quantity of binary data in text
  */
-void NetworkSendCommand(TileIndex tile, uint32 p1, uint32 p2, uint32 cmd, CommandCallback *callback, const char *text, CompanyID company)
+void NetworkSendCommand(TileIndex tile, uint32 p1, uint32 p2, uint32 cmd, CommandCallback *callback, const char *text, CompanyID company, uint32 binary_length)
 {
 	assert((cmd & CMD_FLAGS_MASK) == 0);
 
@@ -145,7 +154,16 @@ void NetworkSendCommand(TileIndex tile, uint32 p1, uint32 p2, uint32 cmd, Comman
 	c.cmd      = cmd;
 	c.callback = callback;
 
-	strecpy(c.text, (text != nullptr) ? text : "", lastof(c.text));
+	c.binary_length = binary_length;
+	if (binary_length == 0) {
+		if (text != nullptr) {
+			c.text.assign(text);
+		} else {
+			c.text.clear();
+		}
+	} else {
+		c.text.assign(text, binary_length);
+	}
 
 	if (_network_server) {
 		/* If we are the server, we queue the command in our 'special' queue.
@@ -157,7 +175,7 @@ void NetworkSendCommand(TileIndex tile, uint32 p1, uint32 p2, uint32 cmd, Comman
 		c.frame = _frame_counter_max + 1;
 		c.my_cmd = true;
 
-		_local_wait_queue.Append(&c);
+		_local_wait_queue.Append(std::move(c));
 		return;
 	}
 
@@ -181,7 +199,7 @@ void NetworkSyncCommandQueue(NetworkClientSocket *cs)
 	for (CommandPacket *p = _local_execution_queue.Peek(); p != nullptr; p = p->next) {
 		CommandPacket c = *p;
 		c.callback = 0;
-		cs->outgoing_queue.Append(&c);
+		cs->outgoing_queue.Append(std::move(c));
 	}
 }
 
@@ -212,7 +230,6 @@ void NetworkExecuteLocalCommandQueue()
 		DoCommandP(cp, cp->my_cmd);
 
 		queue.Pop();
-		free(cp);
 	}
 
 	/* Local company may have changed, so we should not restore the old value */
@@ -244,13 +261,13 @@ static void DistributeCommandPacket(CommandPacket &cp, const NetworkClientSocket
 			 *  first place. This filters that out. */
 			cp.callback = (cs != owner) ? nullptr : callback;
 			cp.my_cmd = (cs == owner);
-			cs->outgoing_queue.Append(&cp);
+			cs->outgoing_queue.Append(cp);
 		}
 	}
 
 	cp.callback = (nullptr != owner) ? nullptr : callback;
 	cp.my_cmd = (nullptr == owner);
-	_local_execution_queue.Append(&cp);
+	_local_execution_queue.Append(cp);
 }
 
 /**
@@ -267,11 +284,10 @@ static void DistributeQueue(CommandQueue *queue, const NetworkClientSocket *owne
 	int to_go = _settings_client.network.commands_per_frame;
 #endif
 
-	CommandPacket *cp;
+	std::unique_ptr<CommandPacket> cp;
 	while (--to_go >= 0 && (cp = queue->Pop(true)) != nullptr) {
 		DistributeCommandPacket(*cp, owner);
-		NetworkAdminCmdLogging(owner, cp);
-		free(cp);
+		NetworkAdminCmdLogging(owner, cp.get());
 	}
 }
 
@@ -304,7 +320,14 @@ const char *NetworkGameSocketHandler::ReceiveCommand(Packet *p, CommandPacket *c
 	cp->p1      = p->Recv_uint32();
 	cp->p2      = p->Recv_uint32();
 	cp->tile    = p->Recv_uint32();
-	p->Recv_string(cp->text, lengthof(cp->text), (!_network_server && GetCommandFlags(cp->cmd) & CMD_STR_CTRL) != 0 ? SVS_ALLOW_CONTROL_CODE | SVS_REPLACE_WITH_QUESTION_MARK : SVS_REPLACE_WITH_QUESTION_MARK);
+	cp->binary_length = p->Recv_uint32();
+	if (cp->binary_length == 0) {
+		p->Recv_string(cp->text, (!_network_server && GetCommandFlags(cp->cmd) & CMD_STR_CTRL) != 0 ? SVS_ALLOW_CONTROL_CODE | SVS_REPLACE_WITH_QUESTION_MARK : SVS_REPLACE_WITH_QUESTION_MARK);
+	} else {
+		if ((p->pos + (PacketSize) cp->binary_length + /* callback index */ 1) > p->size) return "invalid binary data length";
+		if (cp->binary_length > MAX_CMD_TEXT_LENGTH) return "over-size binary data length";
+		p->Recv_binary(cp->text, cp->binary_length);
+	}
 
 	byte callback = p->Recv_uint8();
 	if (callback >= lengthof(_callback_table))  return "invalid callback";
@@ -325,7 +348,13 @@ void NetworkGameSocketHandler::SendCommand(Packet *p, const CommandPacket *cp)
 	p->Send_uint32(cp->p1);
 	p->Send_uint32(cp->p2);
 	p->Send_uint32(cp->tile);
-	p->Send_string(cp->text);
+	p->Send_uint32(cp->binary_length);
+	if (cp->binary_length == 0) {
+		p->Send_string(cp->text.c_str());
+	} else {
+		assert(cp->text.size() >= cp->binary_length);
+		p->Send_binary(cp->text.c_str(), cp->binary_length);
+	}
 
 	byte callback = 0;
 	while (callback < lengthof(_callback_table) && _callback_table[callback] != cp->callback) {

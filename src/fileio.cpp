@@ -34,16 +34,16 @@
 #include "safeguards.h"
 
 /** Size of the #Fio data buffer. */
-#define FIO_BUFFER_SIZE 512
+#define FIO_BUFFER_SIZE 8192
 
 /** Structure for keeping several open files with just one data buffer. */
 struct Fio {
+	byte buffer_start[FIO_BUFFER_SIZE];    ///< local buffer when read from file
 	byte *buffer, *buffer_end;             ///< position pointer in local buffer and last valid byte of buffer
 	size_t pos;                            ///< current (system) position in file
 	FILE *cur_fh;                          ///< current file handle
 	const char *filename;                  ///< current filename
 	FILE *handles[MAX_FILE_SLOTS];         ///< array of file handles we can have open
-	byte buffer_start[FIO_BUFFER_SIZE];    ///< local buffer when read from file
 	const char *filenames[MAX_FILE_SLOTS]; ///< array of filenames we (should) have open
 	char *shortnames[MAX_FILE_SLOTS];      ///< array of short names for spriteloader's use
 #if defined(LIMITED_FDS)
@@ -74,7 +74,7 @@ size_t FioGetPos()
  * @param slot Index of queried file.
  * @return Name of the file.
  */
-const char *FioGetFilename(uint8 slot)
+const char *FioGetFilename(uint slot)
 {
 	return _fio.shortnames[slot];
 }
@@ -111,7 +111,7 @@ static void FioRestoreFile(int slot)
  * @param slot Slot number of the new file.
  * @param pos New absolute position in the new file.
  */
-void FioSeekToFile(uint8 slot, size_t pos)
+void FioSeekToFile(uint slot, size_t pos)
 {
 	FILE *f;
 #if defined(LIMITED_FDS)
@@ -246,14 +246,14 @@ static void FioFreeHandle()
  * @param filename Name of the file at the disk.
  * @param subdir The sub directory to search this file in.
  */
-void FioOpenFile(int slot, const char *filename, Subdirectory subdir)
+void FioOpenFile(uint slot, const char *filename, Subdirectory subdir, char **output_filename)
 {
 	FILE *f;
 
 #if defined(LIMITED_FDS)
 	FioFreeHandle();
 #endif /* LIMITED_FDS */
-	f = FioFOpenFile(filename, "rb", subdir);
+	f = FioFOpenFile(filename, "rb", subdir, nullptr, output_filename);
 	if (f == nullptr) usererror("Cannot open file '%s'", filename);
 	long pos = ftell(f);
 	if (pos < 0) usererror("Cannot read file '%s'", filename);
@@ -396,7 +396,7 @@ char *FioGetDirectory(char *buf, const char *last, Subdirectory subdir)
 	return buf;
 }
 
-static FILE *FioFOpenFileSp(const char *filename, const char *mode, Searchpath sp, Subdirectory subdir, size_t *filesize)
+static FILE *FioFOpenFileSp(const char *filename, const char *mode, Searchpath sp, Subdirectory subdir, size_t *filesize, char **output_filename)
 {
 #if defined(_WIN32) && defined(UNICODE)
 	/* fopen is implemented as a define with ellipses for
@@ -431,6 +431,9 @@ static FILE *FioFOpenFileSp(const char *filename, const char *mode, Searchpath s
 		*filesize = ftell(f);
 		fseek(f, 0, SEEK_SET);
 	}
+	if (output_filename != nullptr) {
+		*output_filename = (f != nullptr) ? stredup(buf, lastof(buf)) : nullptr;
+	}
 	return f;
 }
 
@@ -461,7 +464,7 @@ FILE *FioFOpenFileTar(TarFileListEntry *entry, size_t *filesize)
  * @param subdir Subdirectory to open.
  * @return File handle of the opened file, or \c nullptr if the file is not available.
  */
-FILE *FioFOpenFile(const char *filename, const char *mode, Subdirectory subdir, size_t *filesize)
+FILE *FioFOpenFile(const char *filename, const char *mode, Subdirectory subdir, size_t *filesize, char **output_filename)
 {
 	FILE *f = nullptr;
 	Searchpath sp;
@@ -469,7 +472,7 @@ FILE *FioFOpenFile(const char *filename, const char *mode, Subdirectory subdir, 
 	assert(subdir < NUM_SUBDIRS || subdir == NO_DIRECTORY);
 
 	FOR_ALL_SEARCHPATHS(sp) {
-		f = FioFOpenFileSp(filename, mode, sp, subdir, filesize);
+		f = FioFOpenFileSp(filename, mode, sp, subdir, filesize, output_filename);
 		if (f != nullptr || subdir == NO_DIRECTORY) break;
 	}
 
@@ -524,6 +527,9 @@ FILE *FioFOpenFile(const char *filename, const char *mode, Subdirectory subdir, 
 		TarFileList::iterator it = _tar_filelist[subdir].find(resolved_name);
 		if (it != _tar_filelist[subdir].end()) {
 			f = FioFOpenFileTar(&((*it).second), filesize);
+			if (output_filename != nullptr && f != nullptr) {
+				*output_filename = str_fmt("%s" PATHSEP "%s", ((*it).second).tar_filename, filename);
+			}
 		}
 	}
 
@@ -532,15 +538,15 @@ FILE *FioFOpenFile(const char *filename, const char *mode, Subdirectory subdir, 
 	if (f == nullptr && subdir != NO_DIRECTORY) {
 		switch (subdir) {
 			case BASESET_DIR:
-				f = FioFOpenFile(filename, mode, OLD_GM_DIR, filesize);
+				f = FioFOpenFile(filename, mode, OLD_GM_DIR, filesize, output_filename);
 				if (f != nullptr) break;
 				FALLTHROUGH;
 			case NEWGRF_DIR:
-				f = FioFOpenFile(filename, mode, OLD_DATA_DIR, filesize);
+				f = FioFOpenFile(filename, mode, OLD_DATA_DIR, filesize, output_filename);
 				break;
 
 			default:
-				f = FioFOpenFile(filename, mode, NO_DIRECTORY, filesize);
+				f = FioFOpenFile(filename, mode, NO_DIRECTORY, filesize, output_filename);
 				break;
 		}
 	}

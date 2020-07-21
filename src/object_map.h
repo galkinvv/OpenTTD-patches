@@ -46,7 +46,7 @@ static inline bool IsObjectTypeTile(TileIndex t, ObjectType type)
  */
 static inline ObjectID GetObjectIndex(TileIndex t)
 {
-	assert(IsTileType(t, MP_OBJECT));
+	assert_tile(IsTileType(t, MP_OBJECT), t);
 	return _m[t].m2 | _m[t].m5 << 16;
 }
 
@@ -58,7 +58,7 @@ static inline ObjectID GetObjectIndex(TileIndex t)
  */
 static inline byte GetObjectRandomBits(TileIndex t)
 {
-	assert(IsTileType(t, MP_OBJECT));
+	assert_tile(IsTileType(t, MP_OBJECT), t);
 	return _m[t].m3;
 }
 

@@ -110,7 +110,7 @@ public:
 }
 - (void)drawRect:(NSRect)invalidRect
 {
-	if (driver->cgcontext == NULL) return;
+	if (driver->cgcontext == nullptr) return;
 
 	CGContextRef viewContext = (CGContextRef)[ [ NSGraphicsContext currentContext ] graphicsPort ];
 	CGContextSetShouldAntialias(viewContext, FALSE);
@@ -194,7 +194,7 @@ void WindowQuartzSubdriver::GetDeviceInfo()
 
 	/* Use the new API when compiling for OSX 10.6 or later */
 	CGDisplayModeRef cur_mode = CGDisplayCopyDisplayMode(kCGDirectMainDisplay);
-	if (cur_mode == NULL) { return; }
+	if (cur_mode == nullptr) { return; }
 
 	this->device_width = CGDisplayModeGetWidth(cur_mode);
 	this->device_height = CGDisplayModeGetHeight(cur_mode);
@@ -350,15 +350,15 @@ WindowQuartzSubdriver::WindowQuartzSubdriver()
 	this->window_width  = 0;
 	this->window_height = 0;
 	this->buffer_depth  = 0;
-	this->window_buffer  = NULL;
-	this->pixel_buffer  = NULL;
+	this->window_buffer  = nullptr;
+	this->pixel_buffer  = nullptr;
 	this->active        = false;
 	this->setup         = false;
 
 	this->window = nil;
 	this->cocoaview = nil;
 
-	this->cgcontext = NULL;
+	this->cgcontext = nullptr;
 
 	this->num_dirty_rects = MAX_DIRTY_RECTS;
 }
@@ -537,7 +537,7 @@ bool WindowQuartzSubdriver::WindowResized()
 		kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Host
 	);
 
-	assert(this->cgcontext != NULL);
+	assert(this->cgcontext != nullptr);
 	CGContextSetShouldAntialias(this->cgcontext, FALSE);
 	CGContextSetAllowsAntialiasing(this->cgcontext, FALSE);
 	CGContextSetInterpolationQuality(this->cgcontext, kCGInterpolationNone);
@@ -545,7 +545,7 @@ bool WindowQuartzSubdriver::WindowResized()
 	if (this->buffer_depth == 8) {
 		free(this->pixel_buffer);
 		this->pixel_buffer = malloc(this->window_width * this->window_height);
-		if (this->pixel_buffer == NULL) {
+		if (this->pixel_buffer == nullptr) {
 			DEBUG(driver, 0, "Failed to allocate pixel buffer");
 			return false;
 		}
@@ -569,14 +569,14 @@ CocoaSubdriver *QZ_CreateWindowQuartzSubdriver(int width, int height, int bpp)
 
 	if (bpp != 8 && bpp != 32) {
 		DEBUG(driver, 0, "The cocoa quartz subdriver only supports 8 and 32 bpp.");
-		return NULL;
+		return nullptr;
 	}
 
 	WindowQuartzSubdriver *ret = new WindowQuartzSubdriver();
 
 	if (!ret->ChangeResolution(width, height, bpp)) {
 		delete ret;
-		return NULL;
+		return nullptr;
 	}
 
 	return ret;

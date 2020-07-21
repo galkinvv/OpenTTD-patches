@@ -115,4 +115,9 @@ public:
 	inline void operator delete[](void *ptr) { free(ptr); }
 };
 
+struct FreeDeleter
+{
+	void operator()(const void* ptr) { free(ptr); }
+};
+
 #endif /* ALLOC_TYPE_HPP */

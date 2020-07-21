@@ -46,43 +46,26 @@
 
 #include "safeguards.h"
 
-static int _rename_id = 1;
-static int _rename_what = -1;
-
 void CcGiveMoney(const CommandCost &result, TileIndex tile, uint32 p1, uint32 p2, uint32 cmd)
 {
-	if (result.Failed() || !_settings_game.economy.give_money) return;
+	if (result.Failed() || !_settings_game.economy.give_money || !_networking) return;
 
 	/* Inform the company of the action of one of its clients (controllers). */
 	char msg[64];
 	SetDParam(0, p2);
 	GetString(msg, STR_COMPANY_NAME, lastof(msg));
 
+	/*
+	 * bits 31-16: source company
+	 * bits 15-0: target company
+	 */
+	uint64 auxdata = (p2 & 0xFFFF) | (((uint64) _local_company) << 16);
+
 	if (!_network_server) {
-		NetworkClientSendChat(NETWORK_ACTION_GIVE_MONEY, DESTTYPE_TEAM, p2, msg, p1);
+		NetworkClientSendChat(NETWORK_ACTION_GIVE_MONEY, DESTTYPE_BROADCAST_SS, p2, msg, NetworkTextMessageData(p1, auxdata));
 	} else {
-		NetworkServerSendChat(NETWORK_ACTION_GIVE_MONEY, DESTTYPE_TEAM, p2, msg, CLIENT_ID_SERVER, p1);
+		NetworkServerSendChat(NETWORK_ACTION_GIVE_MONEY, DESTTYPE_BROADCAST_SS, p2, msg, CLIENT_ID_SERVER, NetworkTextMessageData(p1, auxdata));
 	}
-}
-
-void HandleOnEditText(const char *str)
-{
-	switch (_rename_what) {
-		case 3: { // Give money, you can only give money in excess of loan
-			const Company *c = Company::GetIfValid(_local_company);
-			if (c == nullptr) break;
-			Money money = min(c->money - c->current_loan, (Money)(atoi(str) / _currency->rate));
-
-			uint32 money_c = Clamp(ClampToI32(money), 0, 20000000); // Clamp between 20 million and 0
-
-			/* Give 'id' the money, and subtract it from ourself */
-			DoCommandP(0, money_c, _rename_id, CMD_GIVE_MONEY | CMD_MSG(STR_ERROR_INSUFFICIENT_FUNDS), CcGiveMoney, str);
-			break;
-		}
-		default: NOT_REACHED();
-	}
-
-	_rename_id = _rename_what = -1;
 }
 
 /**
@@ -117,14 +100,6 @@ void CcPlaySound_EXPLOSION(const CommandCost &result, TileIndex tile, uint32 p1,
 {
 	if (result.Succeeded() && _settings_client.sound.confirm) SndPlayTileFx(SND_12_EXPLOSION, tile);
 }
-
-void ShowNetworkGiveMoneyWindow(CompanyID company)
-{
-	_rename_id = company;
-	_rename_what = 3;
-	ShowQueryString(STR_EMPTY, STR_NETWORK_GIVE_MONEY_CAPTION, 30, nullptr, CS_NUMERAL, QSF_NONE);
-}
-
 
 /**
  * Zooms a viewport in a window in or out.
@@ -174,9 +149,13 @@ bool DoZoomInOutWindow(ZoomStateChange how, Window *w)
 	if (vp != nullptr) { // the vp can be null when how == ZOOM_NONE
 		vp->virtual_left = w->viewport->scrollpos_x;
 		vp->virtual_top = w->viewport->scrollpos_y;
+		UpdateViewportSizeZoom(vp);
 	}
 	/* Update the windows that have zoom-buttons to perhaps disable their buttons */
 	w->InvalidateData();
+	if (how != ZOOM_NONE) {
+		RebuildViewportOverlay(w, false);
+	}
 	return true;
 }
 
@@ -205,6 +184,7 @@ void FixTitleGameZoom()
 	vp->zoom = _gui_zoom;
 	vp->virtual_width = ScaleByZoom(vp->width, vp->zoom);
 	vp->virtual_height = ScaleByZoom(vp->height, vp->zoom);
+	UpdateViewportSizeZoom(vp);
 }
 
 static const struct NWidgetPart _nested_main_window_widgets[] = {
@@ -235,6 +215,8 @@ enum {
 	GHK_CHAT_ALL,
 	GHK_CHAT_COMPANY,
 	GHK_CHAT_SERVER,
+	GHK_CHANGE_MAP_MODE_PREV,
+	GHK_CHANGE_MAP_MODE_NEXT,
 };
 
 struct MainWindow : Window
@@ -254,6 +236,7 @@ struct MainWindow : Window
 		NWidgetViewport *nvp = this->GetWidget<NWidgetViewport>(WID_M_VIEWPORT);
 		nvp->InitializeViewport(this, TileXY(32, 32), ZOOM_LVL_VIEWPORT);
 
+		this->viewport->map_type = (ViewportMapType) _settings_client.gui.default_viewport_map_mode;
 		this->viewport->overlay = new LinkGraphOverlay(this, WID_M_VIEWPORT, 0, 0, 3);
 		this->refresh.SetInterval(LINKGRAPH_DELAY);
 	}
@@ -356,8 +339,12 @@ struct MainWindow : Window
 				break;
 
 			case GHK_MONEY: // Gimme money
-				/* You can only cheat for money in single player. */
-				if (!_networking) DoCommandP(0, 10000000, 0, CMD_MONEY_CHEAT);
+				/* You can only cheat for money in single player or when otherwise suitably authorised. */
+				if (!_networking || _settings_game.difficulty.money_cheat_in_multiplayer) {
+					DoCommandP(0, 10000000, 0, CMD_MONEY_CHEAT);
+				} else if (_network_server || _network_settings_access) {
+					DoCommandP(0, 10000000, 0, CMD_MONEY_CHEAT_ADMIN);
+				}
 				break;
 
 			case GHK_UPDATE_COORDS: // Update the coordinates of all station signs
@@ -427,6 +414,25 @@ struct MainWindow : Window
 				}
 				break;
 
+			case GHK_CHANGE_MAP_MODE_PREV:
+				if (_focused_window && _focused_window->viewport && _focused_window->viewport->zoom >= ZOOM_LVL_DRAW_MAP) {
+					_focused_window->viewport->map_type = ChangeRenderMode(_focused_window->viewport, true);
+					_focused_window->SetDirty();
+				} else if (this->viewport->zoom >= ZOOM_LVL_DRAW_MAP) {
+					this->viewport->map_type = ChangeRenderMode(this->viewport, true);
+					this->SetDirty();
+				}
+				break;
+			case GHK_CHANGE_MAP_MODE_NEXT:
+				if (_focused_window && _focused_window->viewport && _focused_window->viewport->zoom >= ZOOM_LVL_DRAW_MAP) {
+					_focused_window->viewport->map_type = ChangeRenderMode(_focused_window->viewport, false);
+					_focused_window->SetDirty();
+				} else if (this->viewport->zoom >= ZOOM_LVL_DRAW_MAP) {
+					this->viewport->map_type = ChangeRenderMode(this->viewport, false);
+					this->SetDirty();
+				}
+				break;
+
 			default: return ES_NOT_HANDLED;
 		}
 		return ES_HANDLED;
@@ -443,7 +449,11 @@ struct MainWindow : Window
 
 	void OnMouseWheel(int wheel) override
 	{
-		if (_settings_client.gui.scrollwheel_scrolling != 2) {
+		if (_ctrl_pressed) {
+			/* Cycle through the drawing modes */
+			this->viewport->map_type = ChangeRenderMode(this->viewport, wheel < 0);
+			this->SetDirty();
+		} else if (_settings_client.gui.scrollwheel_scrolling != 2) {
 			ZoomInOrOutToCursorWindow(wheel < 0, this);
 		}
 	}
@@ -467,6 +477,16 @@ struct MainWindow : Window
 		if (!gui_scope) return;
 		/* Forward the message to the appropriate toolbar (ingame or scenario editor) */
 		InvalidateWindowData(WC_MAIN_TOOLBAR, 0, data, true);
+	}
+
+	virtual void OnMouseOver(Point pt, int widget) override
+	{
+		if (pt.x != -1 && _game_mode != GM_MENU && (_mouse_hovering || _settings_client.gui.hover_delay_ms == 0)) {
+			/* Show tooltip with last month production or town name */
+			const Point p = GetTileBelowCursor();
+			const TileIndex tile = TileVirtXY(p.x, p.y);
+			if (tile < MapSize()) ShowTooltipForTile(this, tile);
+		}
 	}
 
 	static HotkeyList hotkeys;
@@ -520,6 +540,8 @@ static Hotkey global_hotkeys[] = {
 	Hotkey(_ghk_chat_all_keys, "chat_all", GHK_CHAT_ALL),
 	Hotkey(_ghk_chat_company_keys, "chat_company", GHK_CHAT_COMPANY),
 	Hotkey(_ghk_chat_server_keys, "chat_server", GHK_CHAT_SERVER),
+	Hotkey(WKC_PAGEUP,   "previous_map_mode", GHK_CHANGE_MAP_MODE_PREV),
+	Hotkey(WKC_PAGEDOWN, "next_map_mode",     GHK_CHANGE_MAP_MODE_NEXT),
 	HOTKEY_LIST_END
 };
 HotkeyList MainWindow::hotkeys("global", global_hotkeys);
@@ -597,5 +619,4 @@ void GameSizeChanged()
 	_cur_resolution.height = _screen.height;
 	ScreenSizeChanged();
 	RelocateAllWindows(_screen.width, _screen.height);
-	MarkWholeScreenDirty();
 }

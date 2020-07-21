@@ -33,9 +33,13 @@ static inline bool MayHaveRoad(TileIndex t)
 {
 	switch (GetTileType(t)) {
 		case MP_ROAD:
-		case MP_STATION:
-		case MP_TUNNELBRIDGE:
 			return true;
+
+		case MP_STATION:
+			return true;
+
+		case MP_TUNNELBRIDGE:
+			return GB(_m[t].m5, 2, 2) == 1;
 
 		default:
 			return false;
@@ -50,7 +54,7 @@ static inline bool MayHaveRoad(TileIndex t)
  */
 static inline RoadTileType GetRoadTileType(TileIndex t)
 {
-	assert(IsTileType(t, MP_ROAD));
+	assert_tile(IsTileType(t, MP_ROAD), t);
 	return (RoadTileType)GB(_m[t].m5, 6, 2);
 }
 
@@ -126,7 +130,7 @@ static inline bool IsRoadDepotTile(TileIndex t)
  */
 static inline RoadBits GetRoadBits(TileIndex t, RoadTramType rtt)
 {
-	assert(IsNormalRoad(t));
+	assert_tile(IsNormalRoad(t), t);
 	if (rtt == RTT_TRAM) return (RoadBits)GB(_m[t].m3, 0, 4);
 	return (RoadBits)GB(_m[t].m5, 0, 4);
 }
@@ -151,7 +155,7 @@ static inline RoadBits GetAllRoadBits(TileIndex tile)
  */
 static inline void SetRoadBits(TileIndex t, RoadBits r, RoadTramType rtt)
 {
-	assert(IsNormalRoad(t)); // XXX incomplete
+	assert_tile(IsNormalRoad(t), t); // XXX incomplete
 	if (rtt == RTT_TRAM) {
 		SB(_m[t].m3, 0, 4, r);
 	} else {
@@ -266,7 +270,7 @@ static inline void SetRoadOwner(TileIndex t, RoadTramType rtt, Owner o)
  */
 static inline bool IsRoadOwner(TileIndex t, RoadTramType rtt, Owner o)
 {
-	assert(HasTileRoadType(t, rtt));
+	assert_tile(HasTileRoadType(t, rtt), t);
 	return (GetRoadOwner(t, rtt) == o);
 }
 
@@ -300,7 +304,7 @@ template <> struct EnumPropsT<DisallowedRoadDirections> : MakeEnumPropsT<Disallo
  */
 static inline DisallowedRoadDirections GetDisallowedRoadDirections(TileIndex t)
 {
-	assert(IsNormalRoad(t));
+	assert_tile(IsNormalRoad(t), t);
 	return (DisallowedRoadDirections)GB(_m[t].m5, 4, 2);
 }
 
@@ -311,7 +315,7 @@ static inline DisallowedRoadDirections GetDisallowedRoadDirections(TileIndex t)
  */
 static inline void SetDisallowedRoadDirections(TileIndex t, DisallowedRoadDirections drd)
 {
-	assert(IsNormalRoad(t));
+	assert_tile(IsNormalRoad(t), t);
 	assert(drd < DRD_END);
 	SB(_m[t].m5, 4, 2, drd);
 }
@@ -324,7 +328,7 @@ static inline void SetDisallowedRoadDirections(TileIndex t, DisallowedRoadDirect
  */
 static inline Axis GetCrossingRoadAxis(TileIndex t)
 {
-	assert(IsLevelCrossing(t));
+	assert_tile(IsLevelCrossing(t), t);
 	return (Axis)GB(_m[t].m5, 0, 1);
 }
 
@@ -336,7 +340,7 @@ static inline Axis GetCrossingRoadAxis(TileIndex t)
  */
 static inline Axis GetCrossingRailAxis(TileIndex t)
 {
-	assert(IsLevelCrossing(t));
+	assert_tile(IsLevelCrossing(t), t);
 	return OtherAxis((Axis)GetCrossingRoadAxis(t));
 }
 
@@ -379,7 +383,7 @@ static inline TrackBits GetCrossingRailBits(TileIndex tile)
  */
 static inline bool HasCrossingReservation(TileIndex t)
 {
-	assert(IsLevelCrossingTile(t));
+	assert_tile(IsLevelCrossingTile(t), t);
 	return HasBit(_m[t].m5, 4);
 }
 
@@ -392,7 +396,7 @@ static inline bool HasCrossingReservation(TileIndex t)
  */
 static inline void SetCrossingReservation(TileIndex t, bool b)
 {
-	assert(IsLevelCrossingTile(t));
+	assert_tile(IsLevelCrossingTile(t), t);
 	SB(_m[t].m5, 4, 1, b ? 1 : 0);
 }
 
@@ -415,7 +419,7 @@ static inline TrackBits GetCrossingReservationTrackBits(TileIndex t)
  */
 static inline bool IsCrossingBarred(TileIndex t)
 {
-	assert(IsLevelCrossing(t));
+	assert_tile(IsLevelCrossing(t), t);
 	return HasBit(_m[t].m5, 5);
 }
 
@@ -427,26 +431,32 @@ static inline bool IsCrossingBarred(TileIndex t)
  */
 static inline void SetCrossingBarred(TileIndex t, bool barred)
 {
-	assert(IsLevelCrossing(t));
+	assert_tile(IsLevelCrossing(t), t);
 	SB(_m[t].m5, 5, 1, barred ? 1 : 0);
 }
 
 /**
- * Unbar a level crossing.
- * @param t The tile to change.
+ * Check if the level crossing is possibly occupied by road vehicle(s).
+ * @param t The tile to query.
+ * @pre IsLevelCrossing(t)
+ * @return True if the level crossing is marked as occupied. This may return false positives.
  */
-static inline void UnbarCrossing(TileIndex t)
+static inline bool IsCrossingPossiblyOccupiedByRoadVehicle(TileIndex t)
 {
-	SetCrossingBarred(t, false);
+	assert_tile(IsLevelCrossing(t), t);
+	return HasBit(_m[t].m5, 1);
 }
 
 /**
- * Bar a level crossing.
- * @param t The tile to change.
+ * Set whether the level crossing is occupied by road vehicle(s).
+ * @param t The tile to modify.
+ * @param barred True if the crossing should be marked as occupied, false otherwise.
+ * @pre IsLevelCrossing(t)
  */
-static inline void BarCrossing(TileIndex t)
+static inline void SetCrossingOccupiedByRoadVehicle(TileIndex t, bool occupied)
 {
-	SetCrossingBarred(t, true);
+	assert_tile(IsLevelCrossing(t), t);
+	SB(_m[t].m5, 1, 1, occupied ? 1 : 0);
 }
 
 /** Check if a road tile has snow/desert. */
@@ -534,7 +544,7 @@ static inline bool IncreaseRoadWorksCounter(TileIndex t)
  */
 static inline void StartRoadWorks(TileIndex t)
 {
-	assert(!HasRoadWorks(t));
+	assert_tile(!HasRoadWorks(t), t);
 	/* Remove any trees or lamps in case or roadwork */
 	switch (GetRoadside(t)) {
 		case ROADSIDE_BARREN:
@@ -550,7 +560,7 @@ static inline void StartRoadWorks(TileIndex t)
  */
 static inline void TerminateRoadWorks(TileIndex t)
 {
-	assert(HasRoadWorks(t));
+	assert_tile(HasRoadWorks(t), t);
 	SetRoadside(t, (Roadside)(GetRoadside(t) - ROADSIDE_GRASS_ROAD_WORKS + ROADSIDE_GRASS));
 	/* Stop the counter */
 	SB(_me[t].m7, 0, 4, 0);
@@ -564,7 +574,7 @@ static inline void TerminateRoadWorks(TileIndex t)
  */
 static inline DiagDirection GetRoadDepotDirection(TileIndex t)
 {
-	assert(IsRoadDepot(t));
+	assert_tile(IsRoadDepot(t), t);
 	return (DiagDirection)GB(_m[t].m5, 0, 2);
 }
 

@@ -14,6 +14,8 @@
 #include "string_func.h"
 #include "fileio_func.h"
 #include "settings_type.h"
+#include "date_func.h"
+#include <array>
 
 #if defined(_WIN32)
 #include "os/windows/win32.h"
@@ -23,6 +25,10 @@
 
 #include "network/network_admin.h"
 SOCKET _debug_socket = INVALID_SOCKET;
+
+#if defined(RANDOM_DEBUG) && defined(UNIX) && defined(__GLIBC__)
+#include <unistd.h>
+#endif
 
 #include "safeguards.h"
 
@@ -40,10 +46,18 @@ int _debug_script_level;
 int _debug_sl_level;
 int _debug_gamelog_level;
 int _debug_desync_level;
+int _debug_yapfdesync_level;
 int _debug_console_level;
+int _debug_linkgraph_level;
+int _debug_sound_level;
 #ifdef RANDOM_DEBUG
 int _debug_random_level;
 #endif
+
+const char *_savegame_DBGL_data = nullptr;
+std::string _loadgame_DBGL_data;
+bool _save_DBGC_data = false;
+std::string _loadgame_DBGC_data;
 
 uint32 _realtime_tick = 0;
 
@@ -68,7 +82,10 @@ struct DebugLevel {
 	DEBUG_LEVEL(sl),
 	DEBUG_LEVEL(gamelog),
 	DEBUG_LEVEL(desync),
+	DEBUG_LEVEL(yapfdesync),
 	DEBUG_LEVEL(console),
+	DEBUG_LEVEL(linkgraph),
+	DEBUG_LEVEL(sound),
 #ifdef RANDOM_DEBUG
 	DEBUG_LEVEL(random),
 #endif
@@ -118,31 +135,63 @@ static void debug_print(const char *dbg, const char *buf)
 	}
 	if (strcmp(dbg, "desync") == 0) {
 		static FILE *f = FioFOpenFile("commands-out.log", "wb", AUTOSAVE_DIR);
-		if (f == nullptr) return;
-
-		fprintf(f, "%s%s\n", GetLogPrefix(), buf);
-		fflush(f);
+		if (f != nullptr) {
+			fprintf(f, "%s%s\n", GetLogPrefix(), buf);
+			fflush(f);
+		}
 #ifdef RANDOM_DEBUG
 	} else if (strcmp(dbg, "random") == 0) {
-		static FILE *f = FioFOpenFile("random-out.log", "wb", AUTOSAVE_DIR);
-		if (f == nullptr) return;
+#if defined(UNIX) && defined(__GLIBC__)
+		static bool have_inited = false;
+		static FILE *f = nullptr;
 
-		fprintf(f, "%s\n", buf);
-		fflush(f);
+		if (!have_inited) {
+			have_inited = true;
+			unsigned int num = 0;
+			int pid = getpid();
+			const char *fn = nullptr;
+			for(;;) {
+				free(fn);
+				fn = str_fmt("random-out-%d-%u.log", pid, num);
+				f = FioFOpenFile(fn, "wx", AUTOSAVE_DIR);
+				if (f == nullptr && errno == EEXIST) {
+					num++;
+					continue;
+				}
+				break;
+			}
+			free(fn);
+		}
+#else
+		static FILE *f = FioFOpenFile("random-out.log", "wb", AUTOSAVE_DIR);
 #endif
-	} else {
-		char buffer[512];
-		seprintf(buffer, lastof(buffer), "%sdbg: [%s] %s\n", GetLogPrefix(), dbg, buf);
+		if (f != nullptr) {
+			fprintf(f, "%s\n", buf);
+			return;
+		}
+#endif
+	}
+
+	char buffer[512];
+	seprintf(buffer, lastof(buffer), "%sdbg: [%s] %s\n", GetLogPrefix(), dbg, buf);
+
+	str_strip_colours(buffer);
+
+	/* do not write desync messages to the console on Windows platforms, as they do
+	 * not seem able to handle text direction change characters in a console without
+	 * crashing, and NetworkTextMessage includes these */
 #if defined(_WIN32)
+	if (strcmp(dbg, "desync") != 0) {
 		TCHAR system_buf[512];
 		convert_to_fs(buffer, system_buf, lengthof(system_buf), true);
 		_fputts(system_buf, stderr);
-#else
-		fputs(buffer, stderr);
-#endif
-		NetworkAdminConsole(dbg, buf);
-		IConsoleDebug(dbg, buf);
 	}
+#else
+	fputs(buffer, stderr);
+#endif
+
+	NetworkAdminConsole(dbg, buf);
+	IConsoleDebug(dbg, buf);
 }
 
 /**
@@ -258,3 +307,54 @@ const char *GetLogPrefix()
 	return _log_prefix;
 }
 
+struct DesyncMsgLogEntry {
+	Date date;
+	DateFract date_fract;
+	uint8 tick_skip_counter;
+	std::string msg;
+
+	DesyncMsgLogEntry() { }
+
+	DesyncMsgLogEntry(std::string msg)
+			: date(_date), date_fract(_date_fract), tick_skip_counter(_tick_skip_counter), msg(msg) { }
+};
+
+static std::array<DesyncMsgLogEntry, 64> desync_msg_log;
+static unsigned int desync_msg_log_count = 0;
+static unsigned int desync_msg_log_next = 0;
+
+void ClearDesyncMsgLog()
+{
+	desync_msg_log_count = 0;
+	desync_msg_log_next = 0;
+}
+
+char *DumpDesyncMsgLog(char *buffer, const char *last)
+{
+	if (!desync_msg_log_count) return buffer;
+
+	const unsigned int count = min<unsigned int>(desync_msg_log_count, desync_msg_log.size());
+	unsigned int log_index = (desync_msg_log_next + desync_msg_log.size() - count) % desync_msg_log.size();
+	unsigned int display_num = desync_msg_log_count - count;
+
+	buffer += seprintf(buffer, last, "Desync Msg Log:\n Showing most recent %u of %u messages\n", count, desync_msg_log_count);
+
+	for (unsigned int i = 0 ; i < count; i++) {
+		const DesyncMsgLogEntry &entry = desync_msg_log[log_index];
+
+		YearMonthDay ymd;
+		ConvertDateToYMD(entry.date, &ymd);
+		buffer += seprintf(buffer, last, "%5u | %4i-%02i-%02i, %2i, %3i | %s\n", display_num, ymd.year, ymd.month + 1, ymd.day, entry.date_fract, entry.tick_skip_counter, entry.msg.c_str());
+		log_index = (log_index + 1) % desync_msg_log.size();
+		display_num++;
+	}
+	buffer += seprintf(buffer, last, "\n");
+	return buffer;
+}
+
+void LogDesyncMsg(std::string msg)
+{
+	desync_msg_log[desync_msg_log_next] = DesyncMsgLogEntry(std::move(msg));
+	desync_msg_log_next = (desync_msg_log_next + 1) % desync_msg_log.size();
+	desync_msg_log_count++;
+}

@@ -14,6 +14,9 @@
 #include "command_type.h"
 #include "viewport_type.h"
 #include "station_map.h"
+#include "core/geometry_type.hpp"
+#include "core/tinystring_type.hpp"
+#include <memory>
 
 typedef Pool<BaseStation, StationID, 32, 64000> StationPool;
 extern StationPool _station_pool;
@@ -54,7 +57,7 @@ struct BaseStation : StationPool::PoolItem<&_station_pool> {
 	TrackedViewportSign sign;       ///< NOSAVE: Dimensions of sign
 	byte delete_ctr;                ///< Delete counter. If greater than 0 then it is decremented until it reaches 0; the waypoint is then is deleted.
 
-	std::string name;               ///< Custom name
+	TinyString name;                ///< Custom name
 	StringID string_id;             ///< Default name (town area) of station
 	mutable std::string cached_name; ///< NOSAVE: Cache of the resolved name of the station, if not using a custom name
 
@@ -166,6 +169,16 @@ struct BaseStation : StationPool::PoolItem<&_station_pool> {
 	inline bool IsInUse() const
 	{
 		return (this->facilities & ~FACIL_WAYPOINT) != 0;
+	}
+
+	/**
+	 * Check whether the base station has given facilities.
+	 * @param facilities The facilities to check.
+	 * @return True if station has at least one of the given \a facilities.
+	 */
+	inline bool HasFacilities(StationFacility facilities) const
+	{
+		return (this->facilities & facilities) != 0;
 	}
 
 	static void PostDestructor(size_t index);

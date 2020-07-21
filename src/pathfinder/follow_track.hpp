@@ -17,6 +17,7 @@
 #include "../tunnelbridge.h"
 #include "../tunnelbridge_map.h"
 #include "../depot_map.h"
+#include "../infrastructure_func.h"
 #include "pf_performance_timer.hpp"
 
 /**
@@ -101,8 +102,9 @@ struct CFollowTrackT
 	{
 		assert(IsTram()); // this function shouldn't be called in other cases
 
-		if (IsNormalRoadTile(tile)) {
-			RoadBits rb = GetRoadBits(tile, RTT_TRAM);
+		const bool is_bridge = IsRoadCustomBridgeHeadTile(tile);
+		if (is_bridge || IsNormalRoadTile(tile)) {
+			RoadBits rb = is_bridge ? GetCustomBridgeHeadRoadBits(tile, RTT_TRAM) : GetRoadBits(tile, RTT_TRAM);
 			switch (rb) {
 				case ROAD_NW: return DIAGDIR_NW;
 				case ROAD_SW: return DIAGDIR_SW;
@@ -123,11 +125,12 @@ struct CFollowTrackT
 		m_old_tile = old_tile;
 		m_old_td = old_td;
 		m_err = EC_NONE;
-		assert(
+		assert_tile(
 			((TrackStatusToTrackdirBits(
 				GetTileTrackStatus(m_old_tile, TT(), (IsRoadTT() && m_veh != nullptr) ? (this->IsTram() ? RTT_TRAM : RTT_ROAD) : 0)
 			) & TrackdirToTrackdirBits(m_old_td)) != 0) ||
-			(IsTram() && GetSingleTramBit(m_old_tile) != INVALID_DIAGDIR) // Disable the assertion for single tram bits
+			(IsTram() && GetSingleTramBit(m_old_tile) != INVALID_DIAGDIR), // Disable the assertion for single tram bits
+			m_old_tile
 		);
 		m_exitdir = TrackdirToExitdir(m_old_td);
 		if (ForcedReverse()) return true;
@@ -156,7 +159,7 @@ struct CFollowTrackT
 
 			return false;
 		}
-		if ((!IsRailTT() && !Allow90degTurns()) || (IsRailTT() && Rail90DegTurnDisallowed(GetTileRailType(m_old_tile), GetTileRailType(m_new_tile), !Allow90degTurns()))) {
+		if (m_tiles_skipped == 0 && ((!IsRailTT() && !Allow90degTurns()) || (IsRailTT() && Rail90DegTurnDisallowedTilesFromDiagDir(m_old_tile, m_new_tile, m_exitdir, !Allow90degTurns())))) {
 			m_new_td_bits &= (TrackdirBits)~(int)TrackdirCrossesTrackdirs(m_old_td);
 			if (m_new_td_bits == TRACKDIR_BIT_NONE) {
 				m_err = EC_90DEG;
@@ -219,7 +222,7 @@ protected:
 				m_tiles_skipped = GetTunnelBridgeLength(m_new_tile, m_old_tile);
 				return;
 			}
-			assert(ReverseDiagDir(enterdir) == m_exitdir);
+			if (!IsRoadCustomBridgeHeadTile(m_old_tile) && !IsRailCustomBridgeHeadTile(m_old_tile)) assert(ReverseDiagDir(enterdir) == m_exitdir);
 		}
 
 		/* normal or station tile, do one step */
@@ -236,7 +239,7 @@ protected:
 	/** stores track status (available trackdirs) for the new tile into m_new_td_bits */
 	inline bool QueryNewTileTrackStatus()
 	{
-		CPerfStart perf(*m_pPerf);
+		CPerfStart perf(m_pPerf);
 		if (IsRailTT() && IsPlainRailTile(m_new_tile)) {
 			m_new_td_bits = (TrackdirBits)(GetTrackBits(m_new_tile) * 0x101);
 		} else {
@@ -305,6 +308,11 @@ protected:
 				m_err = EC_NO_WAY;
 				return false;
 			}
+			/* road stops shouldn't be entered unless allowed to */
+			if (!IsInfraTileUsageAllowed(VEH_ROAD, m_veh_owner, m_new_tile)) {
+				m_err = EC_OWNER;
+				return false;
+			}
 		}
 
 		/* single tram bits can only be entered from one direction */
@@ -323,8 +331,8 @@ protected:
 				m_err = EC_NO_WAY;
 				return false;
 			}
-			/* don't try to enter other company's depots */
-			if (GetTileOwner(m_new_tile) != m_veh_owner) {
+			/* don't try to enter other company's depots if not allowed */
+			if (!IsInfraTileUsageAllowed(VEH_ROAD, m_veh_owner, m_new_tile)) {
 				m_err = EC_OWNER;
 				return false;
 			}
@@ -337,8 +345,8 @@ protected:
 			}
 		}
 
-		/* rail transport is possible only on tiles with the same owner as vehicle */
-		if (IsRailTT() && GetTileOwner(m_new_tile) != m_veh_owner) {
+		/* rail transport is possible only on allowed tiles */
+		if (IsRailTT() && !IsInfraTileUsageAllowed(VEH_TRAIN, m_veh_owner, m_new_tile)) {
 			/* different owner */
 			m_err = EC_NO_WAY;
 			return false;
@@ -346,7 +354,7 @@ protected:
 
 		/* rail transport is possible only on compatible rail types */
 		if (IsRailTT()) {
-			RailType rail_type = GetTileRailType(m_new_tile);
+			RailType rail_type = GetTileRailTypeByEntryDir(m_new_tile, m_exitdir);
 			if (!HasBit(m_railtypes, rail_type)) {
 				/* incompatible rail type */
 				m_err = EC_RAIL_ROAD_TYPE;
@@ -376,8 +384,22 @@ protected:
 					}
 				}
 			} else { // IsBridge(m_new_tile)
-				if (!m_is_bridge) {
-					DiagDirection ramp_enderdir = GetTunnelBridgeDirection(m_new_tile);
+				DiagDirection ramp_enderdir = GetTunnelBridgeDirection(m_new_tile);
+				if (!m_is_bridge && ramp_enderdir == ReverseDiagDir(m_exitdir)) {
+					m_err = EC_NO_WAY;
+					return false;
+				}
+				if (!m_is_bridge && IsRoadTT() && IsRoadCustomBridgeHeadTile(m_new_tile)) {
+					if (!(DiagDirToRoadBits(ReverseDiagDir(m_exitdir)) & GetCustomBridgeHeadRoadBits(m_new_tile, IsTram() ? RTT_TRAM : RTT_ROAD))) {
+						m_err = EC_NO_WAY;
+						return false;
+					}
+				} else if (!m_is_bridge && IsRailTT() && IsRailCustomBridgeHeadTile(m_new_tile)) {
+					if (!(DiagdirReachesTracks(m_exitdir) & GetCustomBridgeHeadTrackBits(m_new_tile))) {
+						m_err = EC_NO_WAY;
+						return false;
+					}
+				} else if (!m_is_bridge) {
 					if (ramp_enderdir != m_exitdir) {
 						m_err = EC_NO_WAY;
 						return false;
@@ -470,7 +492,7 @@ public:
 		}
 		/* Check for speed limit imposed by railtype */
 		if (IsRailTT()) {
-			uint16 rail_speed = GetRailTypeInfo(GetRailType(m_old_tile))->max_speed;
+			uint16 rail_speed = GetRailTypeInfo(GetRailTypeByTrack(m_old_tile, TrackdirToTrack(m_old_td)))->max_speed;
 			if (rail_speed > 0) max_speed = min(max_speed, rail_speed);
 		}
 

@@ -5,6 +5,9 @@ add_files(
     backup_type.hpp
     bitmath_func.cpp
     bitmath_func.hpp
+    checksum_func.hpp
+    container_func.hpp
+    dyn_arena_alloc.hpp
     endian_func.hpp
     endian_type.hpp
     enum_type.hpp
@@ -27,4 +30,5 @@ add_files(
     smallstack_type.hpp
     smallvec_type.hpp
     string_compare_type.hpp
+    tinystring_type.hpp
 )

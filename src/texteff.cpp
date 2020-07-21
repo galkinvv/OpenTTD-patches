@@ -15,8 +15,12 @@
 #include "viewport_func.h"
 #include "settings_type.h"
 #include "guitimer_func.h"
+#include "zoom_func.h"
 
 #include "safeguards.h"
+
+static std::vector<struct TextEffect> _text_effects; ///< Text effects are stored there
+static TextEffectID _free_text_effect = 0;
 
 /** Container for all information about a text effect */
 struct TextEffect : public ViewportSign {
@@ -29,24 +33,26 @@ struct TextEffect : public ViewportSign {
 	/** Reset the text effect */
 	void Reset()
 	{
-		this->MarkDirty();
+		this->MarkDirty(ZOOM_LVL_OUT_8X);
 		this->width_normal = 0;
 		this->string_id = INVALID_STRING_ID;
+		this->params_1 = _free_text_effect;
+		_free_text_effect = this - _text_effects.data();
 	}
 };
-
-static std::vector<struct TextEffect> _text_effects; ///< Text effects are stored there
 
 /* Text Effects */
 TextEffectID AddTextEffect(StringID msg, int center, int y, uint8 duration, TextEffectMode mode)
 {
 	if (_game_mode == GM_MENU) return INVALID_TE_ID;
 
-	TextEffectID i;
-	for (i = 0; i < _text_effects.size(); i++) {
-		if (_text_effects[i].string_id == INVALID_STRING_ID) break;
+	TextEffectID i = _free_text_effect;
+	if (i == _text_effects.size()) {
+		_text_effects.emplace_back();
+		_free_text_effect++;
+	} else {
+		_free_text_effect = _text_effects[i].params_1;
 	}
-	if (i == _text_effects.size()) _text_effects.emplace_back();
 
 	TextEffect &te = _text_effects[i];
 
@@ -59,7 +65,7 @@ TextEffectID AddTextEffect(StringID msg, int center, int y, uint8 duration, Text
 
 	/* Make sure we only dirty the new area */
 	te.width_normal = 0;
-	te.UpdatePosition(center, y, msg);
+	te.UpdatePosition(ZOOM_LVL_OUT_8X, center, y, msg);
 
 	return i;
 }
@@ -73,7 +79,7 @@ void UpdateTextEffect(TextEffectID te_id, StringID msg)
 	te->params_1 = GetDParam(0);
 	te->params_2 = GetDParam(1);
 
-	te->UpdatePosition(te->center, te->top, msg);
+	te->UpdatePosition(ZOOM_LVL_OUT_8X, te->center, te->top, msg);
 }
 
 void RemoveTextEffect(TextEffectID te_id)
@@ -107,6 +113,7 @@ void InitTextEffects()
 {
 	_text_effects.clear();
 	_text_effects.shrink_to_fit();
+	_free_text_effect = 0;
 }
 
 void DrawTextEffects(DrawPixelInfo *dpi)
@@ -114,9 +121,13 @@ void DrawTextEffects(DrawPixelInfo *dpi)
 	/* Don't draw the text effects when zoomed out a lot */
 	if (dpi->zoom > ZOOM_LVL_OUT_8X) return;
 
+	const int bottom_threshold = dpi->top + dpi->height;
+	const int top_threshold = dpi->top - ScaleByZoom(VPSM_TOP + FONT_HEIGHT_NORMAL + VPSM_BOTTOM, dpi->zoom);
+	const bool show_loading = (_settings_client.gui.loading_indicators && !IsTransparencySet(TO_LOADING));
+
 	for (TextEffect &te : _text_effects) {
 		if (te.string_id == INVALID_STRING_ID) continue;
-		if (te.mode == TE_RISING || (_settings_client.gui.loading_indicators && !IsTransparencySet(TO_LOADING))) {
+		if ((te.mode == TE_RISING || show_loading) && te.top > top_threshold && te.top < bottom_threshold) {
 			ViewportAddString(dpi, ZOOM_LVL_OUT_8X, &te, te.string_id, te.string_id - 1, STR_NULL, te.params_1, te.params_2);
 		}
 	}

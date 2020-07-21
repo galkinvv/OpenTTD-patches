@@ -30,6 +30,7 @@
 #include "hotkeys.h"
 #include "engine_base.h"
 #include "terraform_gui.h"
+#include "town_gui.h"
 #include "zoom_func.h"
 
 #include "widgets/terraform_widget.h"
@@ -131,6 +132,9 @@ bool GUIPlaceProcDragXY(ViewportDragDropSelectionProcess proc, TileIndex start_t
 		case DDSP_CREATE_DESERT:
 			GenerateDesertArea(end_tile, start_tile);
 			break;
+		case DDSP_BUY_LAND:
+			DoCommandP(end_tile, start_tile, _ctrl_pressed ? 1 : 0, CMD_PURCHASE_LAND_AREA | CMD_MSG(STR_ERROR_CAN_T_PURCHASE_THIS_LAND), CcPlaySound_SPLAT_RAIL);
+			break;
 		default:
 			return false;
 	}
@@ -145,6 +149,11 @@ bool GUIPlaceProcDragXY(ViewportDragDropSelectionProcess proc, TileIndex start_t
 void PlaceProc_DemolishArea(TileIndex tile)
 {
 	VpStartPlaceSizing(tile, VPM_X_AND_Y, DDSP_DEMOLISH_AREA);
+}
+
+static void PlaceProc_Measure(TileIndex tile)
+{
+	VpStartPlaceSizing(tile, VPM_A_B_LINE, DDSP_MEASURE);
 }
 
 /** Terra form toolbar managing class. */
@@ -168,6 +177,7 @@ struct TerraformToolbarWindow : Window {
 		/* Don't show the place object button when there are no objects to place. */
 		NWidgetStacked *show_object = this->GetWidget<NWidgetStacked>(WID_TT_SHOW_PLACE_OBJECT);
 		show_object->SetDisplayedPlane(ObjectClass::GetUIClassCount() != 0 ? 0 : SZSP_NONE);
+		SetWidgetDisabledState(WID_TT_BUY_LAND, _settings_game.construction.purchase_land_permitted == 0);
 	}
 
 	void OnClick(Point pt, int widget, int click_count) override
@@ -196,12 +206,17 @@ struct TerraformToolbarWindow : Window {
 				break;
 
 			case WID_TT_BUY_LAND: // Buy land button
-				HandlePlacePushButton(this, WID_TT_BUY_LAND, SPR_CURSOR_BUY_LAND, HT_RECT);
+				HandlePlacePushButton(this, WID_TT_BUY_LAND, SPR_CURSOR_BUY_LAND, HT_RECT | HT_DIAGONAL);
 				this->last_user_action = widget;
 				break;
 
 			case WID_TT_PLANT_TREES: // Plant trees button
 				ShowBuildTreesToolbar();
+				break;
+
+			case WID_TT_MEASUREMENT_TOOL:
+				HandlePlacePushButton(this, WID_TT_MEASUREMENT_TOOL, SPR_CURSOR_QUERY, HT_RECT);
+				this->last_user_action = widget;
 				break;
 
 			case WID_TT_PLACE_SIGN: // Place sign button
@@ -237,7 +252,23 @@ struct TerraformToolbarWindow : Window {
 				break;
 
 			case WID_TT_BUY_LAND: // Buy land button
-				DoCommandP(tile, OBJECT_OWNED_LAND, 0, CMD_BUILD_OBJECT | CMD_MSG(STR_ERROR_CAN_T_PURCHASE_THIS_LAND), CcPlaySound_SPLAT_RAIL);
+				switch (_settings_game.construction.purchase_land_permitted) {
+					case 0:
+					case 1:
+						DoCommandP(tile, OBJECT_OWNED_LAND, 0, CMD_BUILD_OBJECT | CMD_MSG(STR_ERROR_CAN_T_PURCHASE_THIS_LAND), CcPlaySound_SPLAT_RAIL);
+						break;
+
+					case 2:
+						VpStartPlaceSizing(tile, VPM_X_AND_Y, DDSP_BUY_LAND);
+						break;
+
+					default:
+						NOT_REACHED();
+				}
+				break;
+
+			case WID_TT_MEASUREMENT_TOOL:
+				PlaceProc_Measure(tile);
 				break;
 
 			case WID_TT_PLACE_SIGN: // Place sign button
@@ -269,7 +300,11 @@ struct TerraformToolbarWindow : Window {
 				case DDSP_RAISE_AND_LEVEL_AREA:
 				case DDSP_LOWER_AND_LEVEL_AREA:
 				case DDSP_LEVEL_AREA:
+				case DDSP_BUY_LAND:
 					GUIPlaceProcDragXY(select_proc, start_tile, end_tile);
+					break;
+				case DDSP_MEASURE:
+					//nothing to do, just draw a tooltip
 					break;
 			}
 		}
@@ -303,6 +338,7 @@ static Hotkey terraform_hotkeys[] = {
 	Hotkey('D' | WKC_GLOBAL_HOTKEY, "dynamite", WID_TT_DEMOLISH),
 	Hotkey('U', "buyland", WID_TT_BUY_LAND),
 	Hotkey('I', "trees", WID_TT_PLANT_TREES),
+	Hotkey('R' | WKC_SHIFT, "ruler", WID_TT_MEASUREMENT_TOOL),
 	Hotkey('O', "placesign", WID_TT_PLACE_SIGN),
 	Hotkey('P', "placeobject", WID_TT_PLACE_OBJECT),
 	HOTKEY_LIST_END
@@ -331,6 +367,8 @@ static const NWidgetPart _nested_terraform_widgets[] = {
 								SetFill(0, 1), SetDataTip(SPR_IMG_BUY_LAND, STR_LANDSCAPING_TOOLTIP_PURCHASE_LAND),
 		NWidget(WWT_PUSHIMGBTN, COLOUR_DARK_GREEN, WID_TT_PLANT_TREES), SetMinimalSize(22, 22),
 								SetFill(0, 1), SetDataTip(SPR_IMG_PLANTTREES, STR_SCENEDIT_TOOLBAR_PLANT_TREES),
+		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_TT_MEASUREMENT_TOOL), SetMinimalSize(22,22),
+								SetFill(0, 1), SetDataTip(SPR_IMG_QUERY, STR_LANDSCAPING_TOOLTIP_RULER_TOOL),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_TT_PLACE_SIGN), SetMinimalSize(22, 22),
 								SetFill(0, 1), SetDataTip(SPR_IMG_SIGN, STR_SCENEDIT_TOOLBAR_PLACE_SIGN),
 		NWidget(NWID_SELECTION, INVALID_COLOUR, WID_TT_SHOW_PLACE_OBJECT),
@@ -464,6 +502,9 @@ static const NWidgetPart _nested_scen_edit_land_gen_widgets[] = {
 			EndContainer(),
 			NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_ETT_PLACE_OBJECT), SetMinimalSize(23, 22),
 										SetFill(0, 1), SetDataTip(SPR_IMG_TRANSMITTER, STR_SCENEDIT_TOOLBAR_PLACE_OBJECT),
+			NWidget(NWID_SPACER), SetFill(1, 0),
+			NWidget(WWT_IMGBTN, COLOUR_GREY, WID_ETT_PLACE_HOUSE), SetMinimalSize(23, 22),
+										SetFill(0, 1), SetDataTip(SPR_IMG_TOWN, STR_SCENEDIT_TOOLBAR_PLACE_HOUSE),
 			NWidget(NWID_SPACER), SetFill(1, 0),
 		EndContainer(),
 		NWidget(NWID_HORIZONTAL),
@@ -607,6 +648,10 @@ struct ScenarioEditorLandscapeGenerationWindow : Window {
 				ShowBuildObjectPicker();
 				break;
 
+			case WID_ETT_PLACE_HOUSE: // Place house button
+				ShowBuildHousePicker();
+				break;
+
 			case WID_ETT_INCREASE_SIZE:
 			case WID_ETT_DECREASE_SIZE: { // Increase/Decrease terraform size
 				int size = (widget == WID_ETT_INCREASE_SIZE) ? 1 : -1;
@@ -692,6 +737,7 @@ struct ScenarioEditorLandscapeGenerationWindow : Window {
 				case DDSP_LOWER_AND_LEVEL_AREA:
 				case DDSP_LEVEL_AREA:
 				case DDSP_DEMOLISH_AREA:
+				case DDSP_BUY_LAND:
 					GUIPlaceProcDragXY(select_proc, start_tile, end_tile);
 					break;
 			}
@@ -728,6 +774,7 @@ static Hotkey terraform_editor_hotkeys[] = {
 	Hotkey('R', "rocky", WID_ETT_PLACE_ROCKS),
 	Hotkey('T', "desert", WID_ETT_PLACE_DESERT),
 	Hotkey('O', "object", WID_ETT_PLACE_OBJECT),
+	Hotkey('H', "house", WID_ETT_PLACE_HOUSE),
 	HOTKEY_LIST_END
 };
 

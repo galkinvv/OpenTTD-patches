@@ -60,7 +60,6 @@ public:
 protected:
 	Node                *m_pBestDestNode;      ///< pointer to the destination node found at last round
 	Node                *m_pBestIntermediateNode; ///< here should be node closest to the destination if path not found
-	const YAPFSettings  *m_settings;           ///< current settings (_settings_game.yapf)
 	int                  m_max_search_nodes;   ///< maximum number of nodes we are allowed to visit before we give up
 	const VehicleType   *m_veh;                ///< vehicle that we are trying to drive
 
@@ -81,7 +80,6 @@ public:
 	inline CYapfBaseT()
 		: m_pBestDestNode(nullptr)
 		, m_pBestIntermediateNode(nullptr)
-		, m_settings(&_settings_game.pf.yapf)
 		, m_max_search_nodes(PfGetSettings().max_search_nodes)
 		, m_veh(nullptr)
 		, m_stats_cost_calcs(0)
@@ -104,7 +102,7 @@ public:
 	/** return current settings (can be custom - company based - but later) */
 	inline const YAPFSettings& PfGetSettings() const
 	{
-		return *m_settings;
+		return _settings_game.pf.yapf;
 	}
 
 	/**
@@ -138,11 +136,13 @@ public:
 				break;
 			}
 
+			m_nodes.DequeueBestOpenNode();
 			Yapf().PfFollowNode(*n);
 			if (m_max_search_nodes == 0 || m_nodes.ClosedCount() < m_max_search_nodes) {
-				m_nodes.PopOpenNode(n->GetKey());
+				m_nodes.PopAlreadyDequeuedOpenNode(n->GetKey());
 				m_nodes.InsertClosedNode(*n);
 			} else {
+				m_nodes.ReenqueueOpenNode(*n);
 				bDestFound = false;
 				break;
 			}
@@ -206,15 +206,23 @@ public:
 	}
 
 	/** add multiple nodes - direct children of the given node */
-	inline void AddMultipleNodes(Node *parent, const TrackFollower &tf)
+	template <class TNodeFunc>
+	inline void AddMultipleNodes(Node *parent, const TrackFollower &tf, TNodeFunc node_func)
 	{
 		bool is_choice = (KillFirstBit(tf.m_new_td_bits) != TRACKDIR_BIT_NONE);
 		for (TrackdirBits rtds = tf.m_new_td_bits; rtds != TRACKDIR_BIT_NONE; rtds = KillFirstBit(rtds)) {
 			Trackdir td = (Trackdir)FindFirstBit2x64(rtds);
 			Node &n = Yapf().CreateNewNode();
 			n.Set(parent, tf.m_new_tile, td, is_choice);
+			node_func(n);
 			Yapf().AddNewNode(n, tf);
 		}
+	}
+
+	/** add multiple nodes - direct children of the given node */
+	inline void AddMultipleNodes(Node *parent, const TrackFollower &tf)
+	{
+		AddMultipleNodes(parent, tf, [&](Node &n) {});
 	}
 
 	/**

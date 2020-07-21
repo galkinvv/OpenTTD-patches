@@ -13,6 +13,7 @@
 #include "../core/pool_type.hpp"
 #include "../core/smallmap_type.hpp"
 #include "../core/smallmatrix_type.hpp"
+#include "../core/bitmath_func.hpp"
 #include "../station_base.h"
 #include "../cargotype.h"
 #include "../date_func.h"
@@ -522,12 +523,18 @@ public:
 	NodeID AddNode(const Station *st);
 	void RemoveNode(NodeID id);
 
+	inline uint64 CalculateCostEstimate() const {
+		uint64 size_squared = this->Size() * this->Size();
+		return size_squared * FindLastBit(size_squared * size_squared); // N^2 * 4log_2(N)
+	}
+
 protected:
 	friend class LinkGraph::ConstNode;
 	friend class LinkGraph::Node;
 	friend const SaveLoad *GetLinkGraphDesc();
 	friend const SaveLoad *GetLinkGraphJobDesc();
-	friend void SaveLoad_LinkGraph(LinkGraph &lg);
+	friend void Save_LinkGraph(LinkGraph &lg);
+	friend void Load_LinkGraph(LinkGraph &lg);
 
 	CargoID cargo;         ///< Cargo of this component's link graph.
 	Date last_compression; ///< Last time the capacities and supplies were compressed.

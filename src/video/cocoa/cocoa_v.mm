@@ -54,7 +54,7 @@ static OTTDMain *_ottd_main;
 static bool _cocoa_video_started = false;
 static bool _cocoa_video_dialog = false;
 
-CocoaSubdriver *_cocoa_subdriver = NULL;
+CocoaSubdriver *_cocoa_subdriver = nullptr;
 
 static NSString *OTTDMainLaunchGameEngine = @"ottdmain_launch_game_engine";
 
@@ -296,11 +296,11 @@ uint QZ_ListModes(OTTD_Point *modes, uint max_modes, CGDirectDisplayID display_i
 /**
  * Update the video modus.
  *
- * @pre _cocoa_subdriver != NULL
+ * @pre _cocoa_subdriver != nullptr
  */
 static void QZ_UpdateVideoModes()
 {
-	assert(_cocoa_subdriver != NULL);
+	assert(_cocoa_subdriver != nullptr);
 
 	OTTD_Point modes[32];
 	uint count = _cocoa_subdriver->ListModes(modes, lengthof(modes));
@@ -316,7 +316,7 @@ static void QZ_UpdateVideoModes()
  */
 void QZ_GameSizeChanged()
 {
-	if (_cocoa_subdriver == NULL) return;
+	if (_cocoa_subdriver == nullptr) return;
 
 	/* Tell the game that the resolution has changed */
 	_screen.width = _cocoa_subdriver->GetWidth();
@@ -386,7 +386,7 @@ void VideoDriver_Cocoa::Stop()
 	[ _ottd_main unregisterObserver ];
 
 	delete _cocoa_subdriver;
-	_cocoa_subdriver = NULL;
+	_cocoa_subdriver = nullptr;
 
 	[ _ottd_main release ];
 
@@ -406,14 +406,14 @@ const char *VideoDriver_Cocoa::Start(const StringList &parm)
 	setupApplication();
 
 	/* Don't create a window or enter fullscreen if we're just going to show a dialog. */
-	if (_cocoa_video_dialog) return NULL;
+	if (_cocoa_video_dialog) return nullptr;
 
 	int width  = _cur_resolution.width;
 	int height = _cur_resolution.height;
 	int bpp = BlitterFactory::GetCurrentBlitter()->GetScreenDepth();
 
 	_cocoa_subdriver = QZ_CreateSubdriver(width, height, bpp, _fullscreen, true);
-	if (_cocoa_subdriver == NULL) {
+	if (_cocoa_subdriver == nullptr) {
 		Stop();
 		return "Could not create subdriver";
 	}
@@ -421,7 +421,7 @@ const char *VideoDriver_Cocoa::Start(const StringList &parm)
 	QZ_GameSizeChanged();
 	QZ_UpdateVideoModes();
 
-	return NULL;
+	return nullptr;
 }
 
 /**
@@ -434,7 +434,7 @@ const char *VideoDriver_Cocoa::Start(const StringList &parm)
  */
 void VideoDriver_Cocoa::MakeDirty(int left, int top, int width, int height)
 {
-	assert(_cocoa_subdriver != NULL);
+	assert(_cocoa_subdriver != nullptr);
 
 	_cocoa_subdriver->MakeDirty(left, top, width, height);
 }
@@ -461,7 +461,7 @@ void VideoDriver_Cocoa::MainLoop()
  */
 bool VideoDriver_Cocoa::ChangeResolution(int w, int h)
 {
-	assert(_cocoa_subdriver != NULL);
+	assert(_cocoa_subdriver != nullptr);
 
 	bool ret = _cocoa_subdriver->ChangeResolution(w, h, BlitterFactory::GetCurrentBlitter()->GetScreenDepth());
 
@@ -479,7 +479,7 @@ bool VideoDriver_Cocoa::ChangeResolution(int w, int h)
  */
 bool VideoDriver_Cocoa::ToggleFullscreen(bool full_screen)
 {
-	assert(_cocoa_subdriver != NULL);
+	assert(_cocoa_subdriver != nullptr);
 
 	return _cocoa_subdriver->ToggleFullscreen();
 }
@@ -501,7 +501,7 @@ void VideoDriver_Cocoa::EditBoxLostFocus()
 {
 	if (_cocoa_subdriver != NULL) [ [ _cocoa_subdriver->cocoaview inputContext ] discardMarkedText ];
 	/* Clear any marked string from the current edit box. */
-	HandleTextInput(NULL, true);
+	HandleTextInput(nullptr, true);
 }
 
 /**
@@ -518,7 +518,7 @@ void CocoaDialog(const char *title, const char *message, const char *buttonLabel
 	_cocoa_video_dialog = true;
 
 	bool wasstarted = _cocoa_video_started;
-	if (VideoDriver::GetInstance() == NULL) {
+	if (VideoDriver::GetInstance() == nullptr) {
 		setupApplication(); // Setup application before showing dialog
 	} else if (!_cocoa_video_started && VideoDriver::GetInstance()->Start(StringList()) != NULL) {
 		fprintf(stderr, "%s: %s\n", title, message);
@@ -533,7 +533,7 @@ void CocoaDialog(const char *title, const char *message, const char *buttonLabel
 	[ alert runModal ];
 	[ alert release ];
 
-	if (!wasstarted && VideoDriver::GetInstance() != NULL) VideoDriver::GetInstance()->Stop();
+	if (!wasstarted && VideoDriver::GetInstance() != nullptr) VideoDriver::GetInstance()->Stop();
 
 	_cocoa_video_dialog = false;
 }
@@ -551,7 +551,7 @@ void cocoaSetApplicationBundleDir()
 		AppendPathSeparator(tmp, lastof(tmp));
 		_searchpaths[SP_APPLICATION_BUNDLE_DIR] = stredup(tmp);
 	} else {
-		_searchpaths[SP_APPLICATION_BUNDLE_DIR] = NULL;
+		_searchpaths[SP_APPLICATION_BUNDLE_DIR] = nullptr;
 	}
 }
 
@@ -822,7 +822,7 @@ static const char *Utf8AdvanceByUtf16Units(const char *str, NSUInteger count)
  */
 - (void)mouseExited:(NSEvent *)theEvent
 {
-	if (_cocoa_subdriver != NULL) UndrawMouseCursor();
+	if (_cocoa_subdriver != nullptr) UndrawMouseCursor();
 	_cursor.in_window = false;
 }
 
@@ -834,16 +834,16 @@ static const char *Utf8AdvanceByUtf16Units(const char *str, NSUInteger count)
 
 	NSString *s = [ aString isKindOfClass:[ NSAttributedString class ] ] ? [ aString string ] : (NSString *)aString;
 
-	const char *insert_point = NULL;
-	const char *replace_range = NULL;
+	const char *insert_point = nullptr;
+	const char *replace_range = nullptr;
 	if (replacementRange.location != NSNotFound) {
 		/* Calculate the part to be replaced. */
 		insert_point = Utf8AdvanceByUtf16Units(_focused_window->GetFocusedText(), replacementRange.location);
 		replace_range = Utf8AdvanceByUtf16Units(insert_point, replacementRange.length);
 	}
 
-	HandleTextInput(NULL, true);
-	HandleTextInput([ s UTF8String ], false, NULL, insert_point, replace_range);
+	HandleTextInput(nullptr, true);
+	HandleTextInput([ s UTF8String ], false, nullptr, insert_point, replace_range);
 }
 
 /** Insert the given text at the caret. */
@@ -860,9 +860,9 @@ static const char *Utf8AdvanceByUtf16Units(const char *str, NSUInteger count)
 	NSString *s = [ aString isKindOfClass:[ NSAttributedString class ] ] ? [ aString string ] : (NSString *)aString;
 
 	const char *utf8 = [ s UTF8String ];
-	if (utf8 != NULL) {
-		const char *insert_point = NULL;
-		const char *replace_range = NULL;
+	if (utf8 != nullptr) {
+		const char *insert_point = nullptr;
+		const char *replace_range = nullptr;
 		if (replacementRange.location != NSNotFound) {
 			/* Calculate the part to be replaced. */
 			NSRange marked = [ self markedRange ];
@@ -886,7 +886,7 @@ static const char *Utf8AdvanceByUtf16Units(const char *str, NSUInteger count)
 /** Unmark the current marked text. */
 - (void)unmarkText
 {
-	HandleTextInput(NULL, true);
+	HandleTextInput(nullptr, true);
 }
 
 /** Get the caret position. */
@@ -905,7 +905,7 @@ static const char *Utf8AdvanceByUtf16Units(const char *str, NSUInteger count)
 
 	size_t mark_len;
 	const char *mark = _focused_window->GetMarkedText(&mark_len);
-	if (mark != NULL) {
+	if (mark != nullptr) {
 		NSUInteger start = CountUtf16Units(_focused_window->GetFocusedText(), mark);
 		NSUInteger len = CountUtf16Units(mark, mark + mark_len);
 
@@ -921,7 +921,7 @@ static const char *Utf8AdvanceByUtf16Units(const char *str, NSUInteger count)
 	if (!EditBoxInGlobalFocus()) return NO;
 
 	size_t len;
-	return _focused_window->GetMarkedText(&len) != NULL;
+	return _focused_window->GetMarkedText(&len) != nullptr;
 }
 
 /** Get a string corresponding to the given range. */
@@ -932,7 +932,7 @@ static const char *Utf8AdvanceByUtf16Units(const char *str, NSUInteger count)
 	NSString *s = [ NSString stringWithUTF8String:_focused_window->GetFocusedText() ];
 	NSRange valid_range = NSIntersectionRange(NSMakeRange(0, [ s length ]), theRange);
 
-	if (actualRange != NULL) *actualRange = valid_range;
+	if (actualRange != nullptr) *actualRange = valid_range;
 	if (valid_range.length == 0) return nil;
 
 	return [ [ [ NSAttributedString alloc ] initWithString:[ s substringWithRange:valid_range ] ] autorelease ];
@@ -941,7 +941,7 @@ static const char *Utf8AdvanceByUtf16Units(const char *str, NSUInteger count)
 /** Get a string corresponding to the given range. */
 - (NSAttributedString *)attributedSubstringFromRange:(NSRange)theRange
 {
-	return [ self attributedSubstringForProposedRange:theRange actualRange:NULL ];
+	return [ self attributedSubstringForProposedRange:theRange actualRange:nullptr ];
 }
 
 /** Get the current edit box string. */
@@ -962,7 +962,7 @@ static const char *Utf8AdvanceByUtf16Units(const char *str, NSUInteger count)
 	Point pt = { (int)view_pt.x, (int)[ self frame ].size.height - (int)view_pt.y };
 
 	const char *ch = _focused_window->GetTextCharacterAtPosition(pt);
-	if (ch == NULL) return NSNotFound;
+	if (ch == nullptr) return NSNotFound;
 
 	return CountUtf16Units(_focused_window->GetFocusedText(), ch);
 }

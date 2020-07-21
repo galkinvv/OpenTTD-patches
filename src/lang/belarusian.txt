@@ -2384,7 +2384,6 @@ STR_NETWORK_COMPANY_LIST_NEW_COMPANY                            :Новая ка
 # Network client list
 STR_NETWORK_CLIENTLIST_KICK                                     :Выкінуць гульца
 STR_NETWORK_CLIENTLIST_BAN                                      :Бан
-STR_NETWORK_CLIENTLIST_GIVE_MONEY                               :Передаць грошай
 STR_NETWORK_CLIENTLIST_SPEAK_TO_ALL                             :Пагутарыць з усімі
 STR_NETWORK_CLIENTLIST_SPEAK_TO_COMPANY                         :Пагутарыць з кампаніяй
 STR_NETWORK_CLIENTLIST_SPEAK_TO_CLIENT                          :Прыватнае паведамленьне
@@ -2392,8 +2391,6 @@ STR_NETWORK_CLIENTLIST_SPEAK_TO_CLIENT                          :Прыватн�
 STR_NETWORK_SERVER                                              :Сэрвэр
 STR_NETWORK_CLIENT                                              :Кліент
 STR_NETWORK_SPECTATORS                                          :Назіральнікі
-
-STR_NETWORK_GIVE_MONEY_CAPTION                                  :{WHITE}Увядзіце суму грошай, якую вы хочаце перадаць
 
 # Network set password
 STR_COMPANY_PASSWORD_CANCEL                                     :{BLACK}Не захоўваць уведзены пароль
@@ -3574,6 +3571,7 @@ STR_COMPANY_VIEW_RELOCATE_HQ                                    :{BLACK}Пера
 STR_COMPANY_VIEW_RELOCATE_COMPANY_HEADQUARTERS                  :{BLACK}Перамясьціць штаб-кватэру кампаніі ў іншае месца за 1% ацэнкавага кошту капіталу кампаніі. Shift+пстрычка — ацэнка кошту пераносу.
 STR_COMPANY_VIEW_INFRASTRUCTURE_BUTTON                          :{BLACK}Дэталi
 STR_COMPANY_VIEW_INFRASTRUCTURE_TOOLTIP                         :{BLACK}Паказаць дэталёвыя iнфраструктурныя падлiкi
+STR_COMPANY_VIEW_GIVE_MONEY_BUTTON                              :{BLACK}Передаць грошай
 
 STR_COMPANY_VIEW_NEW_FACE_BUTTON                                :{BLACK}Зьнешнасьць
 STR_COMPANY_VIEW_NEW_FACE_TOOLTIP                               :{BLACK}Зьмяніць зьнешнасьць дырэктара
@@ -3591,6 +3589,7 @@ STR_COMPANY_VIEW_SELL_SHARE_TOOLTIP                             :{BLACK}Прад
 
 STR_COMPANY_VIEW_COMPANY_NAME_QUERY_CAPTION                     :Кампанія
 STR_COMPANY_VIEW_PRESIDENT_S_NAME_QUERY_CAPTION                 :Імя дырэктара
+STR_COMPANY_VIEW_GIVE_MONEY_QUERY_CAPTION                       :Увядзіце суму грошай, якую вы хочаце перадаць
 
 STR_BUY_COMPANY_MESSAGE                                         :{WHITE}Мы шукаем транспартную кампанію для далучэньня да яе.{}{}Вы хочаце купіць {COMPANY} за {CURRENCY_LONG}?
 

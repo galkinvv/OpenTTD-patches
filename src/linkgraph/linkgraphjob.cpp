@@ -26,18 +26,30 @@ INSTANTIATE_POOL_METHODS(LinkGraphJob)
  */
 /* static */ Path *Path::invalid_path = new Path(INVALID_NODE, true);
 
+static DateTicks GetLinkGraphJobJoinDateTicks(uint duration_multiplier)
+{
+	DateTicks ticks = _settings_game.linkgraph.recalc_time * DAY_TICKS * duration_multiplier;
+	if (_settings_game.linkgraph.recalc_not_scaled_by_daylength) {
+		ticks /= _settings_game.economy.day_length_factor;
+	}
+	return ticks + (_date * DAY_TICKS) + _date_fract;
+}
+
 /**
  * Create a link graph job from a link graph. The link graph will be copied so
  * that the calculations don't interfer with the normal operations on the
  * original. The job is immediately started.
  * @param orig Original LinkGraph to be copied.
  */
-LinkGraphJob::LinkGraphJob(const LinkGraph &orig) :
+LinkGraphJob::LinkGraphJob(const LinkGraph &orig, uint duration_multiplier) :
 		/* Copying the link graph here also copies its index member.
 		 * This is on purpose. */
 		link_graph(orig),
 		settings(_settings_game.linkgraph),
-		join_date(_date + _settings_game.linkgraph.recalc_time)
+		join_date_ticks(GetLinkGraphJobJoinDateTicks(duration_multiplier)),
+		start_date_ticks((_date * DAY_TICKS) + _date_fract),
+		job_completed(false),
+		abort_job(false)
 {
 }
 
@@ -52,22 +64,9 @@ void LinkGraphJob::EraseFlows(NodeID from)
 	}
 }
 
-/**
- * Spawn a thread if possible and run the link graph job in the thread. If
- * that's not possible run the job right now in the current thread.
- */
-void LinkGraphJob::SpawnThread()
+void LinkGraphJob::SetJobGroup(std::shared_ptr<LinkGraphJobGroup> group)
 {
-	if (!StartNewThread(&this->thread, "ottd:linkgraph", &(LinkGraphSchedule::Run), this)) {
-		/* Of course this will hang a bit.
-		 * On the other hand, if you want to play games which make this hang noticeably
-		 * on a platform without threads then you'll probably get other problems first.
-		 * OK:
-		 * If someone comes and tells me that this hangs for him/her, I'll implement a
-		 * smaller grained "Step" method for all handlers and add some more ticks where
-		 * "Step" is called. No problem in principle. */
-		LinkGraphSchedule::Run(this);
-	}
+	this->group = std::move(group);
 }
 
 /**
@@ -75,21 +74,26 @@ void LinkGraphJob::SpawnThread()
  */
 void LinkGraphJob::JoinThread()
 {
-	if (this->thread.joinable()) {
-		this->thread.join();
+	if (this->group != nullptr) {
+		this->group->JoinThread();
+		this->group.reset();
 	}
 }
 
 /**
- * Join the link graph job and destroy it.
+ * Join the link graph job thread, if not already joined.
  */
 LinkGraphJob::~LinkGraphJob()
 {
 	this->JoinThread();
+}
 
-	/* Don't update stuff from other pools, when everything is being removed.
-	 * Accessing other pools may be invalid. */
-	if (CleaningPool()) return;
+/**
+ * Join the link graph job thread, then merge/apply it.
+ */
+void LinkGraphJob::FinaliseJob()
+{
+	this->JoinThread();
 
 	/* Link graph has been merged into another one. */
 	if (!LinkGraph::IsValidID(this->link_graph.index)) return;
@@ -140,29 +144,84 @@ LinkGraphJob::~LinkGraphJob()
 		 * somewhere. Do delete them and also reroute relevant cargo if
 		 * automatic distribution has been turned off for that cargo. */
 		for (FlowStatMap::iterator it(ge.flows.begin()); it != ge.flows.end();) {
-			FlowStatMap::iterator new_it = flows.find(it->first);
+			FlowStatMap::iterator new_it = flows.find(it->GetOrigin());
 			if (new_it == flows.end()) {
+				bool should_erase = true;
 				if (_settings_game.linkgraph.GetDistributionType(this->Cargo()) != DT_MANUAL) {
-					it->second.Invalidate();
-					++it;
-				} else {
-					FlowStat shares(INVALID_STATION, 1);
-					it->second.SwapShares(shares);
-					ge.flows.erase(it++);
-					for (FlowStat::SharesMap::const_iterator shares_it(shares.GetShares()->begin());
-							shares_it != shares.GetShares()->end(); ++shares_it) {
+					should_erase = it->Invalidate();
+				}
+				if (should_erase) {
+					FlowStat shares(INVALID_STATION, INVALID_STATION, 1);
+					it->SwapShares(shares);
+					it = ge.flows.erase(it);
+					for (FlowStat::const_iterator shares_it(shares.begin());
+							shares_it != shares.end(); ++shares_it) {
 						RerouteCargo(st, this->Cargo(), shares_it->second, st->index);
 					}
+				} else {
+					++it;
 				}
 			} else {
-				it->second.SwapShares(new_it->second);
+				it->SwapShares(*new_it);
 				flows.erase(new_it);
 				++it;
 			}
 		}
-		ge.flows.insert(flows.begin(), flows.end());
+		for (FlowStatMap::iterator it(flows.begin()); it != flows.end(); ++it) {
+			ge.flows.insert(std::move(*it));
+		}
+		ge.flows.SortStorage();
 		InvalidateWindowData(WC_STATION_VIEW, st->index, this->Cargo());
 	}
+}
+
+/**
+ * Check if job has actually finished.
+ * This is allowed to spuriously return an incorrect value.
+ * @return True if job has actually finished.
+ */
+bool LinkGraphJob::IsJobCompleted() const
+{
+#if defined(__GNUC__) || defined(__clang__)
+	return __atomic_load_n(&job_completed, __ATOMIC_RELAXED);
+#else
+	return job_completed;
+#endif
+}
+
+/**
+ * Check if job has been requested to be aborted.
+ * This is allowed to spuriously return a falsely negative value.
+ * @return True if job abort has been requested.
+ */
+bool LinkGraphJob::IsJobAborted() const
+{
+#if defined(__GNUC__) || defined(__clang__)
+	return __atomic_load_n(&abort_job, __ATOMIC_RELAXED);
+#else
+	return abort_job;
+#endif
+}
+
+/**
+ * Abort job.
+ * The job may exit early at the next available opportunity.
+ * After this method has been called the state of the job is undefined, and the only valid operation
+ * is to join the thread and discard the job data.
+ */
+void LinkGraphJob::AbortJob()
+{
+	/*
+	 * Note that this it not guaranteed to be an atomic write and there are no memory barriers or other protections.
+	 * Readers of this variable in another thread may see an out of date value.
+	 * However this is OK as if this method is called the state of the job/thread does not matter anyway.
+	 */
+
+#if defined(__GNUC__) || defined(__clang__)
+	__atomic_store_n(&(abort_job), true, __ATOMIC_RELAXED);
+#else
+	abort_job = true;
+#endif
 }
 
 /**
@@ -202,8 +261,7 @@ void LinkGraphJob::EdgeAnnotation::Init()
 void LinkGraphJob::NodeAnnotation::Init(uint supply)
 {
 	this->undelivered_supply = supply;
-	new (&this->flows) FlowStatMap;
-	new (&this->paths) PathList;
+	this->received_demand = 0;
 }
 
 /**
@@ -220,10 +278,10 @@ void Path::Fork(Path *base, uint cap, int free_cap, uint dist)
 	this->free_capacity = min(base->free_capacity, free_cap);
 	this->distance = base->distance + dist;
 	assert(this->distance > 0);
-	if (this->parent != base) {
+	if (this->GetParent() != base) {
 		this->Detach();
-		this->parent = base;
-		this->parent->num_children++;
+		this->SetParent(base);
+		base->num_children++;
 	}
 	this->origin = base->origin;
 }
@@ -238,8 +296,8 @@ void Path::Fork(Path *base, uint cap, int free_cap, uint dist)
  */
 uint Path::AddFlow(uint new_flow, LinkGraphJob &job, uint max_saturation)
 {
-	if (this->parent != nullptr) {
-		LinkGraphJob::Edge edge = job[this->parent->node][this->node];
+	if (this->GetParent() != nullptr) {
+		LinkGraphJob::Edge edge = job[this->GetParent()->node][this->node];
 		if (max_saturation != UINT_MAX) {
 			uint usable_cap = edge.Capacity() * max_saturation / 100;
 			if (usable_cap > edge.Flow()) {
@@ -248,9 +306,9 @@ uint Path::AddFlow(uint new_flow, LinkGraphJob &job, uint max_saturation)
 				return 0;
 			}
 		}
-		new_flow = this->parent->AddFlow(new_flow, job, max_saturation);
+		new_flow = this->GetParent()->AddFlow(new_flow, job, max_saturation);
 		if (this->flow == 0 && new_flow > 0) {
-			job[this->parent->node].Paths().push_front(this);
+			job[this->GetParent()->node].Paths().push_back(this);
 		}
 		edge.AddFlow(new_flow);
 	}
@@ -268,6 +326,6 @@ Path::Path(NodeID n, bool source) :
 	capacity(source ? UINT_MAX : 0),
 	free_capacity(source ? INT_MAX : INT_MIN),
 	flow(0), node(n), origin(source ? n : INVALID_NODE),
-	num_children(0), parent(nullptr)
+	num_children(0), parent_storage(0)
 {}
 

@@ -12,10 +12,11 @@
 
 #include "core/smallstack_type.hpp"
 #include "tilearea_type.h"
-#include <set>
+#include "3rdparty/cpp-btree/btree_set.h"
 
 typedef uint16 StationID;
 typedef uint16 RoadStopID;
+typedef uint16 DockID;
 
 struct BaseStation;
 struct Station;
@@ -84,14 +85,14 @@ enum CatchmentArea {
 	MAX_CATCHMENT      = 10, ///< Maximum catchment for airports with "modified catchment" enabled
 };
 
-static const uint MAX_LENGTH_STATION_NAME_CHARS = 32; ///< The maximum length of a station name in characters including '\0'
+static const uint MAX_LENGTH_STATION_NAME_CHARS = 128; ///< The maximum length of a station name in characters including '\0'
 
 struct StationCompare {
 	bool operator() (const Station *lhs, const Station *rhs) const;
 };
 
 /** List of stations */
-typedef std::set<Station *, StationCompare> StationList;
+typedef btree::btree_set<Station *, StationCompare> StationList;
 
 /**
  * Structure contains cached list of stations nearby. The list

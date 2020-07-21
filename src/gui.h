@@ -20,7 +20,6 @@
 struct Window;
 
 /* main_gui.cpp */
-void HandleOnEditText(const char *str);
 void InitializeGUI();
 
 /* settings_gui.cpp */
@@ -57,6 +56,8 @@ void ShowEstimatedCostOrIncome(Money cost, int x, int y);
 
 void ShowExtraViewPortWindow(TileIndex tile = INVALID_TILE);
 void ShowExtraViewPortWindowForTileUnderCursor();
+
+void ShowModifierKeyToggleWindow();
 
 /* bridge_gui.cpp */
 void ShowBuildBridgeWindow(TileIndex start, TileIndex end, TransportType transport_type, byte bridge_type);

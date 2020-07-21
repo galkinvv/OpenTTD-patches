@@ -45,6 +45,7 @@
 #include "company_base.h"
 #include "core/random_func.hpp"
 #include "core/backup_type.hpp"
+#include "core/checksum_func.hpp"
 
 #include "table/strings.h"
 
@@ -52,6 +53,8 @@
 
 /** Delay counter for considering the next disaster. */
 uint16 _disaster_delay;
+
+static uint32 _disaster_vehicle_count = 0;
 
 static void DisasterClearSquare(TileIndex tile)
 {
@@ -111,6 +114,14 @@ void DisasterVehicle::UpdateImage()
 	SpriteID img = this->image_override;
 	if (img == 0) img = _disaster_images[this->subtype][this->direction];
 	this->sprite_seq.Set(img);
+	this->UpdateSpriteSeqBound();
+}
+
+DisasterVehicle::DisasterVehicle() :
+		SpecializedVehicleBase()
+{
+	RegisterGameEvents(GEF_DISASTER_VEH);
+	_disaster_vehicle_count++;
 }
 
 /**
@@ -124,6 +135,9 @@ void DisasterVehicle::UpdateImage()
 DisasterVehicle::DisasterVehicle(int x, int y, Direction direction, DisasterSubType subtype, VehicleID big_ufo_destroyer_target) :
 		SpecializedVehicleBase(), big_ufo_destroyer_target(big_ufo_destroyer_target)
 {
+	RegisterGameEvents(GEF_DISASTER_VEH);
+	_disaster_vehicle_count++;
+
 	this->vehstatus = VS_UNCLICKABLE;
 
 	this->x_pos = x;
@@ -166,9 +180,15 @@ DisasterVehicle::DisasterVehicle(int x, int y, Direction direction, DisasterSubT
 	this->owner = OWNER_NONE;
 	this->image_override = 0;
 	this->current_order.Free();
+	this->UpdateIsDrawn();
 
 	this->UpdateImage();
 	this->UpdatePositionAndViewport();
+}
+
+DisasterVehicle::~DisasterVehicle()
+{
+	_disaster_vehicle_count--;
 }
 
 /**
@@ -184,6 +204,7 @@ void DisasterVehicle::UpdatePosition(int x, int y, int z)
 	this->z_pos = z;
 	this->tile = TileVirtXY(x, y);
 
+	this->cur_image_valid_dir = INVALID_DIR;
 	this->UpdateImage();
 	this->UpdatePositionAndViewport();
 
@@ -197,6 +218,7 @@ void DisasterVehicle::UpdatePosition(int x, int y, int z)
 		safe_y = Clamp(u->y_pos, 0, MapMaxY() * TILE_SIZE);
 		u->z_pos = GetSlopePixelZ(safe_x, safe_y);
 		u->direction = this->direction;
+		u->cur_image_valid_dir = INVALID_DIR;
 
 		u->UpdateImage();
 		u->UpdatePositionAndViewport();
@@ -361,6 +383,7 @@ static bool DisasterTick_Ufo(DisasterVehicle *v)
 		uint dist = Delta(v->x_pos, u->x_pos) + Delta(v->y_pos, u->y_pos);
 
 		if (dist < TILE_SIZE && !(u->vehstatus & VS_HIDDEN) && u->breakdown_ctr == 0) {
+			u->breakdown_type = BREAKDOWN_CRITICAL;
 			u->breakdown_ctr = 3;
 			u->breakdown_delay = 140;
 		}
@@ -542,10 +565,11 @@ static bool DisasterTick_Big_Ufo(DisasterVehicle *v)
 		v->current_order.SetDestination(2);
 
 		for (Vehicle *target : Vehicle::Iterate()) {
-			if (target->IsGroundVehicle()) {
+			if (target->IsGroundVehicle() && !HasBit(target->subtype, GVSF_VIRTUAL)) {
 				if (Delta(target->x_pos, v->x_pos) + Delta(target->y_pos, v->y_pos) <= 12 * (int)TILE_SIZE) {
 					target->breakdown_ctr = 5;
 					target->breakdown_delay = 0xF0;
+					target->breakdown_type = BREAKDOWN_CRITICAL;
 				}
 			}
 		}
@@ -561,6 +585,7 @@ static bool DisasterTick_Big_Ufo(DisasterVehicle *v)
 		DisasterVehicle *u = new DisasterVehicle(-6 * (int)TILE_SIZE, v->y_pos, DIR_SW, ST_BIG_UFO_DESTROYER, v->index);
 		DisasterVehicle *w = new DisasterVehicle(-6 * (int)TILE_SIZE, v->y_pos, DIR_SW, ST_BIG_UFO_DESTROYER_SHADOW);
 		u->SetNext(w);
+		InvalidateVehicleTickCaches();
 	} else if (v->current_order.GetDestination() == 0) {
 		int x = TileX(v->dest_tile) * TILE_SIZE;
 		int y = TileY(v->dest_tile) * TILE_SIZE;
@@ -691,6 +716,7 @@ static DisasterVehicleTickProc * const _disastervehicle_tick_procs[] = {
 
 bool DisasterVehicle::Tick()
 {
+	UpdateStateChecksum((((uint64) this->x_pos) << 32) | this->y_pos);
 	return _disastervehicle_tick_procs[this->subtype](this);
 }
 
@@ -719,6 +745,8 @@ static void Disaster_Zeppeliner_Init()
 	/* Allocate shadow */
 	DisasterVehicle *u = new DisasterVehicle(x, 0, DIR_SE, ST_ZEPPELINER_SHADOW);
 	v->SetNext(u);
+
+	InvalidateVehicleTickCaches();
 }
 
 
@@ -737,6 +765,8 @@ static void Disaster_Small_Ufo_Init()
 	/* Allocate shadow */
 	DisasterVehicle *u = new DisasterVehicle(x, 0, DIR_SE, ST_SMALL_UFO_SHADOW);
 	v->SetNext(u);
+
+	InvalidateVehicleTickCaches();
 }
 
 
@@ -763,6 +793,8 @@ static void Disaster_Airplane_Init()
 	DisasterVehicle *v = new DisasterVehicle(x, y, DIR_NE, ST_AIRPLANE);
 	DisasterVehicle *u = new DisasterVehicle(x, y, DIR_NE, ST_AIRPLANE_SHADOW);
 	v->SetNext(u);
+
+	InvalidateVehicleTickCaches();
 }
 
 
@@ -791,6 +823,8 @@ static void Disaster_Helicopter_Init()
 
 	DisasterVehicle *w = new DisasterVehicle(x, y, DIR_SW, ST_HELICOPTER_ROTORS);
 	u->SetNext(w);
+
+	InvalidateVehicleTickCaches();
 }
 
 
@@ -809,6 +843,8 @@ static void Disaster_Big_Ufo_Init()
 	/* Allocate shadow */
 	DisasterVehicle *u = new DisasterVehicle(x, y, DIR_NW, ST_BIG_UFO_SHADOW);
 	v->SetNext(u);
+
+	InvalidateVehicleTickCaches();
 }
 
 
@@ -832,6 +868,8 @@ static void Disaster_Submarine_Init(DisasterSubType subtype)
 	if (!IsWaterTile(TileVirtXY(x, y))) return;
 
 	new DisasterVehicle(x, y, dir, subtype);
+
+	InvalidateVehicleTickCaches();
 }
 
 /* Curious submarine #1, just floats around */
@@ -896,7 +934,7 @@ static const Disaster _disasters[] = {
 	{Disaster_CoalMine_Init,        1950, 1985}, // coalmine
 };
 
-static void DoDisaster()
+void DoDisaster()
 {
 	byte buf[lengthof(_disasters)];
 
@@ -937,6 +975,8 @@ void StartupDisasters()
  */
 void ReleaseDisastersTargetingIndustry(IndustryID i)
 {
+	if (!_disaster_vehicle_count) return;
+
 	for (DisasterVehicle *v : DisasterVehicle::Iterate()) {
 		/* primary disaster vehicles that have chosen target */
 		if (v->subtype == ST_AIRPLANE || v->subtype == ST_HELICOPTER) {
@@ -952,6 +992,8 @@ void ReleaseDisastersTargetingIndustry(IndustryID i)
  */
 void ReleaseDisastersTargetingVehicle(VehicleID vehicle)
 {
+	if (!_disaster_vehicle_count) return;
+
 	for (DisasterVehicle *v : DisasterVehicle::Iterate()) {
 		/* primary disaster vehicles that have chosen target */
 		if (v->subtype == ST_SMALL_UFO) {

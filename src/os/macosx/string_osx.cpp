@@ -13,6 +13,7 @@
 #include "../../strings_func.h"
 #include "../../table/control_codes.h"
 #include "../../fontcache.h"
+#include "../../scope.h"
 #include "macos.h"
 
 #include <CoreFoundation/CoreFoundation.h>
@@ -309,6 +310,8 @@ int MacOSStringCompare(const char *s1, const char *s2)
 {
 	static bool supported = MacOSVersionIsAtLeast(10, 5, 0);
 	if (!supported) return 0;
+
+	if (_osx_locale == nullptr) return 0;
 
 	CFStringCompareFlags flags = kCFCompareCaseInsensitive | kCFCompareNumerically | kCFCompareLocalized | kCFCompareWidthInsensitive | kCFCompareForcedOrdering;
 

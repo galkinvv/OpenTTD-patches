@@ -205,6 +205,18 @@ enum WindowClass {
 	WC_VEHICLE_ORDERS,
 
 	/**
+	 * Vehicle cargo type load orders; %Window numbers:
+	 *   - #VehicleID = #CargoTypeOrdersWidgets
+	 */
+	WC_VEHICLE_CARGO_TYPE_LOAD_ORDERS,
+
+	/**
+	 * Vehicle cargo type unload orders; %Window numbers:
+	 *   - #VehicleID = #CargoTypeOrdersWidgets
+	 */
+	WC_VEHICLE_CARGO_TYPE_UNLOAD_ORDERS,
+
+	/**
 	 * Replace vehicle window; %Window numbers:
 	 *   - #VehicleType = #ReplaceVehicleWidgets
 	 */
@@ -233,6 +245,12 @@ enum WindowClass {
 	 *   - 0 = #JoinStationWidgets
 	 */
 	WC_SELECT_STATION,
+
+	/**
+	 * Select town (when placing a house); %Window numbers:
+	 *   - 0 = #SelectTownWidgets
+	 */
+	WC_SELECT_TOWN,
 
 	/**
 	 * News window; %Window numbers:
@@ -367,6 +385,12 @@ enum WindowClass {
 	 *   - 0 = #BuildObjectWidgets
 	 */
 	WC_BUILD_OBJECT,
+
+	/**
+	 * Build house; %Window numbers:
+	 *  - 0 = #BuildHouseWidgets
+	*/
+	WC_BUILD_HOUSE,
 
 	/**
 	 * Build vehicle; %Window numbers:
@@ -666,6 +690,7 @@ enum WindowClass {
 	 *   - 0 = #SpriteAlignerWidgets
 	 */
 	WC_SPRITE_ALIGNER,
+	WC_ZONING_TOOLBAR,
 
 	/**
 	 * Linkgraph legend; %Window numbers:
@@ -690,12 +715,53 @@ enum WindowClass {
 	 *   - 0 = #FrametimeGraphWindowWidgets
 	 */
 	WC_FRAMETIME_GRAPH,
-
 	/**
 	 * Screenshot window; %Window numbers:
 	 *   - 0 = #ScreenshotWidgets
 	 */
 	WC_SCREENSHOT,
+
+	/**
+	 * Trace restrict programme window; %Window numbers:
+	 *   - #TileIndex << 3 | #Track = #TraceRestrictWindow
+	 */
+	WC_TRACE_RESTRICT,
+
+	/**
+	 * Trace restrict slot window; %Window numbers:
+	 *   - Packed value = #SlotListWidgets / #VehicleListWidgets
+	 */
+	WC_TRACE_RESTRICT_SLOTS,
+
+	/**
+	 * Programmable pre-signals window
+	 */
+	WC_SIGNAL_PROGRAM,
+
+	/**
+	 * Departure boards
+	 */
+	WC_DEPARTURES_BOARD,
+
+	/**
+	 * Vehicle scheduled dispatch - departure slots
+	 */
+	WC_SCHDISPATCH_SLOTS,
+
+	/**
+	 * Plans window.
+	 */
+	WC_PLANS,
+
+	WC_TEMPLATEGUI_MAIN,
+	WC_TEMPLATEGUI_RPLALL,
+	WC_BUILD_VIRTUAL_TRAIN,
+	WC_CREATE_TEMPLATE,
+
+	/**
+	 * Modifier key toggle window.
+	 */
+	WC_MODIFIER_KEY_TOGGLE,
 
 	WC_INVALID = 0xFFFF, ///< Invalid window.
 };
@@ -709,6 +775,7 @@ enum GameOptionsInvalidationData {
 };
 
 struct Window;
+struct WindowBase;
 
 /** Number to differentiate different windows of the same class */
 typedef int32 WindowNumber;

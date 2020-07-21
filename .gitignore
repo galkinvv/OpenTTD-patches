@@ -1,7 +1,8 @@
 /.vs
-/build
+/build*/
 CMakeSettings.json
 docs/aidocs/*
 docs/gamedocs/*
 docs/source/*
 /out
+*.tmp

@@ -38,9 +38,11 @@
 #include "zoom_func.h"
 
 #include <vector>
+#include <functional>
 
 #include "safeguards.h"
 
+extern void FlushDeparturesWindowTextCaches();
 
 static const StringID _driveside_dropdown[] = {
 	STR_GAME_OPTIONS_ROAD_VEHICLES_DROPDOWN_LEFT,
@@ -226,7 +228,7 @@ struct GameOptionsWindow : Window {
 				/* You can only change the drive side if you are in the menu or ingame with
 				 * no vehicles present. In a networking game only the server can change it */
 				extern bool RoadVehiclesAreBuilt();
-				if ((_game_mode != GM_MENU && RoadVehiclesAreBuilt()) || (_networking && !_network_server)) {
+				if ((_game_mode != GM_MENU && RoadVehiclesAreBuilt()) || (_networking && !(_network_server || _network_settings_access))) {
 					disabled = ~(1 << this->opt->vehicle.road_side); // disable the other value
 				}
 
@@ -528,6 +530,7 @@ struct GameOptionsWindow : Window {
 				ClearAllCachedNames();
 				UpdateAllVirtCoords();
 				ReInitAllWindows();
+				FlushDeparturesWindowTextCaches();
 				break;
 
 			case WID_GO_RESOLUTION_DROPDOWN: // Change resolution
@@ -543,14 +546,18 @@ struct GameOptionsWindow : Window {
 				UpdateAllVirtCoords();
 				FixTitleGameZoom();
 				ReInitAllWindows();
+				FlushDeparturesWindowTextCaches();
 				break;
 
 			case WID_GO_FONT_ZOOM_DROPDOWN:
+				extern void UpdateFontHeightCache();
 				GfxClearSpriteCache();
 				_font_zoom = (ZoomLevel)(ZOOM_LVL_OUT_4X - index);
 				ClearFontCache();
+				UpdateFontHeightCache();
 				LoadStringWidthTable();
 				UpdateAllVirtCoords();
+				FlushDeparturesWindowTextCaches();
 				break;
 
 			case WID_GO_BASE_GRF_DROPDOWN:
@@ -790,10 +797,24 @@ struct SettingEntry : BaseSettingEntry {
 	void SetValueDParams(uint first_param, int32 value) const;
 
 protected:
+	SettingEntry(const SettingDesc *setting, uint index);
 	virtual void DrawSetting(GameSettings *settings_ptr, int left, int right, int y, bool highlight) const;
+	virtual void DrawSettingString(uint left, uint right, int y, bool highlight, int32 value) const;
 
 private:
 	bool IsVisibleByRestrictionMode(RestrictionMode mode) const;
+};
+
+/** Standard setting */
+struct CargoDestPerCargoSettingEntry : SettingEntry {
+	CargoID cargo;
+
+	CargoDestPerCargoSettingEntry(CargoID cargo, const SettingDesc *setting, uint index);
+	virtual void Init(byte level = 0);
+	virtual bool UpdateFilterState(SettingFilter &filter, bool force_visible);
+
+protected:
+	virtual void DrawSettingString(uint left, uint right, int y, bool highlight, int32 value) const;
 };
 
 /** Containers for BaseSettingEntry */
@@ -827,6 +848,7 @@ struct SettingsContainer {
 struct SettingsPage : BaseSettingEntry, SettingsContainer {
 	StringID title;     ///< Title of the sub-page
 	bool folded;        ///< Sub-page is folded (not visible except for its title)
+	std::function<bool()> hide_callback; ///< optional callback, returns true if this shouldbe hidden
 
 	SettingsPage(StringID title);
 
@@ -962,6 +984,13 @@ SettingEntry::SettingEntry(const char *name)
 	this->index = 0;
 }
 
+SettingEntry::SettingEntry(const SettingDesc *setting, uint index)
+{
+	this->name = nullptr;
+	this->setting = setting;
+	this->index = index;
+}
+
 /**
  * Initialization of a setting entry
  * @param level      Page nesting level of this entry
@@ -970,7 +999,7 @@ void SettingEntry::Init(byte level)
 {
 	BaseSettingEntry::Init(level);
 	this->setting = GetSettingFromName(this->name, &this->index);
-	assert(this->setting != nullptr);
+	assert_msg(this->setting != nullptr, "name: %s", this->name);
 }
 
 /**
@@ -1051,6 +1080,10 @@ bool SettingEntry::IsVisibleByRestrictionMode(RestrictionMode mode) const
  */
 bool SettingEntry::UpdateFilterState(SettingFilter &filter, bool force_visible)
 {
+	if (this->setting->desc.flags & SGF_NO_NEWGAME && _game_mode == GM_MENU) {
+		SETBITS(this->flags, SEF_FILTERED);
+		return false;
+	}
 	CLRBITS(this->flags, SEF_FILTERED);
 
 	bool visible = true;
@@ -1109,7 +1142,16 @@ void SettingEntry::SetValueDParams(uint first_param, int32 value) const
 	if (sdb->cmd == SDT_BOOLX) {
 		SetDParam(first_param++, value != 0 ? STR_CONFIG_SETTING_ON : STR_CONFIG_SETTING_OFF);
 	} else {
-		if ((sdb->flags & SGF_MULTISTRING) != 0) {
+		if ((sdb->flags & SGF_ENUM) != 0) {
+			StringID str = STR_UNDEFINED;
+			for (const SettingDescEnumEntry *enumlist = sdb->enumlist; enumlist != nullptr && enumlist->str != STR_NULL; enumlist++) {
+				if (enumlist->val == value) {
+					str = enumlist->str;
+					break;
+				}
+			}
+			SetDParam(first_param++, str);
+		} else if ((sdb->flags & SGF_MULTISTRING) != 0) {
 			SetDParam(first_param++, sdb->str_val - sdb->min + value);
 		} else if ((sdb->flags & SGF_DISPLAY_ABS) != 0) {
 			SetDParam(first_param++, sdb->str_val + ((value >= 0) ? 1 : 0));
@@ -1150,7 +1192,7 @@ void SettingEntry::DrawSetting(GameSettings *settings_ptr, int left, int right, 
 	if (sdb->cmd == SDT_BOOLX) {
 		/* Draw checkbox for boolean-value either on/off */
 		DrawBoolButton(buttons_left, button_y, value != 0, editable);
-	} else if ((sdb->flags & SGF_MULTISTRING) != 0) {
+	} else if ((sdb->flags & (SGF_MULTISTRING | SGF_ENUM)) != 0) {
 		/* Draw [v] button for settings of an enum-type */
 		DrawDropDownButton(buttons_left, button_y, COLOUR_YELLOW, state != 0, editable);
 	} else {
@@ -1158,8 +1200,46 @@ void SettingEntry::DrawSetting(GameSettings *settings_ptr, int left, int right, 
 		DrawArrowButtons(buttons_left, button_y, COLOUR_YELLOW, state,
 				editable && value != (sdb->flags & SGF_0ISDISABLED ? 0 : sdb->min), editable && (uint32)value != sdb->max);
 	}
+	this->DrawSettingString(text_left, text_right, y + (SETTING_HEIGHT - FONT_HEIGHT_NORMAL) / 2, highlight, value);
+}
+
+void SettingEntry::DrawSettingString(uint left, uint right, int y, bool highlight, int32 value) const
+{
+	const SettingDesc *sd = this->setting;
+	const SettingDescBase *sdb = &sd->desc;
 	this->SetValueDParams(1, value);
-	DrawString(text_left, text_right, y + (SETTING_HEIGHT - FONT_HEIGHT_NORMAL) / 2, sdb->str, highlight ? TC_WHITE : TC_LIGHT_BLUE);
+	DrawString(left, right, y, sdb->str, highlight ? TC_WHITE : TC_LIGHT_BLUE);
+}
+
+/* == CargoDestPerCargoSettingEntry methods == */
+
+CargoDestPerCargoSettingEntry::CargoDestPerCargoSettingEntry(CargoID cargo, const SettingDesc *setting, uint index)
+	: SettingEntry(setting, index), cargo(cargo) {}
+
+void CargoDestPerCargoSettingEntry::Init(byte level)
+{
+	BaseSettingEntry::Init(level);
+}
+
+void CargoDestPerCargoSettingEntry::DrawSettingString(uint left, uint right, int y, bool highlight, int32 value) const
+{
+	const SettingDesc *sd = this->setting;
+	const SettingDescBase *sdb = &sd->desc;
+	assert(sdb->str == STR_CONFIG_SETTING_DISTRIBUTION_PER_CARGO);
+	SetDParam(0, CargoSpec::Get(this->cargo)->name);
+	SetDParam(1, highlight ? STR_ORANGE_STRING1_WHITE : STR_ORANGE_STRING1_LTBLUE);
+	this->SetValueDParams(2, value);
+	DrawString(left, right, y, STR_CONFIG_SETTING_DISTRIBUTION_PER_CARGO_PARAM, highlight ? TC_WHITE : TC_LIGHT_BLUE);
+}
+
+bool CargoDestPerCargoSettingEntry::UpdateFilterState(SettingFilter &filter, bool force_visible)
+{
+	if (!HasBit(_cargo_mask, this->cargo)) {
+		SETBITS(this->flags, SEF_FILTERED);
+		return false;
+	} else {
+		return SettingEntry::UpdateFilterState(filter, force_visible);
+	}
 }
 
 /* == SettingsContainer methods == */
@@ -1278,7 +1358,6 @@ uint SettingsContainer::GetMaxHelpHeight(int maxw)
 	return biggest;
 }
 
-
 /**
  * Draw a row in the settings panel.
  *
@@ -1377,6 +1456,7 @@ bool SettingsPage::UpdateFilterState(SettingFilter &filter, bool force_visible)
 	}
 
 	bool visible = SettingsContainer::UpdateFilterState(filter, force_visible);
+	if (this->hide_callback && this->hide_callback()) visible = false;
 	if (visible) {
 		CLRBITS(this->flags, SEF_FILTERED);
 	} else {
@@ -1500,6 +1580,10 @@ static SettingsContainer &GetSettingsTree()
 			graphics->Add(new SettingEntry("gui.zoom_max"));
 			graphics->Add(new SettingEntry("gui.smallmap_land_colour"));
 			graphics->Add(new SettingEntry("gui.graph_line_thickness"));
+			graphics->Add(new SettingEntry("gui.show_vehicle_route_steps"));
+			graphics->Add(new SettingEntry("gui.show_vehicle_route"));
+			graphics->Add(new SettingEntry("gui.dash_level_of_route_lines"));
+			graphics->Add(new SettingEntry("gui.show_restricted_signal_default"));
 		}
 
 		SettingsPage *sound = main->Add(new SettingsPage(STR_CONFIG_SETTING_SOUND));
@@ -1528,6 +1612,18 @@ static SettingsContainer &GetSettingsTree()
 
 			SettingsPage *viewports = interface->Add(new SettingsPage(STR_CONFIG_SETTING_INTERFACE_VIEWPORTS));
 			{
+				SettingsPage *viewport_map = interface->Add(new SettingsPage(STR_CONFIG_SETTING_VIEWPORT_MAP_OPTIONS));
+				{
+					viewport_map->Add(new SettingEntry("gui.default_viewport_map_mode"));
+					viewport_map->Add(new SettingEntry("gui.action_when_viewport_map_is_dblclicked"));
+					viewport_map->Add(new SettingEntry("gui.viewport_map_scan_surroundings"));
+					viewport_map->Add(new SettingEntry("gui.show_scrolling_viewport_on_map"));
+					viewport_map->Add(new SettingEntry("gui.show_slopes_on_viewport_map"));
+					viewport_map->Add(new SettingEntry("gui.show_bridges_on_map"));
+					viewport_map->Add(new SettingEntry("gui.show_tunnels_on_map"));
+					viewport_map->Add(new SettingEntry("gui.use_owner_colour_for_tunnelbridge"));
+				}
+
 				viewports->Add(new SettingEntry("gui.auto_scrolling"));
 				viewports->Add(new SettingEntry("gui.scroll_mode"));
 				viewports->Add(new SettingEntry("gui.smooth_scroll"));
@@ -1551,6 +1647,7 @@ static SettingsContainer &GetSettingsTree()
 			SettingsPage *construction = interface->Add(new SettingsPage(STR_CONFIG_SETTING_INTERFACE_CONSTRUCTION));
 			{
 				construction->Add(new SettingEntry("gui.link_terraform_toolbar"));
+				construction->Add(new SettingEntry("construction.simulated_wormhole_signals"));
 				construction->Add(new SettingEntry("gui.enable_signal_gui"));
 				construction->Add(new SettingEntry("gui.persistent_buildingtools"));
 				construction->Add(new SettingEntry("gui.quick_goto"));
@@ -1558,15 +1655,84 @@ static SettingsContainer &GetSettingsTree()
 				construction->Add(new SettingEntry("gui.disable_unsuitable_building"));
 			}
 
+			SettingsPage *departureboards = interface->Add(new SettingsPage(STR_CONFIG_SETTING_INTERFACE_DEPARTUREBOARDS));
+			{
+				departureboards->Add(new SettingEntry("gui.max_departures"));
+				departureboards->Add(new SettingEntry("gui.max_departure_time"));
+				departureboards->Add(new SettingEntry("gui.departure_calc_frequency"));
+				departureboards->Add(new SettingEntry("gui.departure_show_vehicle"));
+				departureboards->Add(new SettingEntry("gui.departure_show_group"));
+				departureboards->Add(new SettingEntry("gui.departure_show_company"));
+				departureboards->Add(new SettingEntry("gui.departure_show_vehicle_type"));
+				departureboards->Add(new SettingEntry("gui.departure_show_vehicle_color"));
+				departureboards->Add(new SettingEntry("gui.departure_larger_font"));
+				departureboards->Add(new SettingEntry("gui.departure_destination_type"));
+				departureboards->Add(new SettingEntry("gui.departure_show_both"));
+				departureboards->Add(new SettingEntry("gui.departure_only_passengers"));
+				departureboards->Add(new SettingEntry("gui.departure_smart_terminus"));
+				departureboards->Add(new SettingEntry("gui.departure_conditionals"));
+				departureboards->Add(new SettingEntry("gui.departure_show_all_stops"));
+				departureboards->Add(new SettingEntry("gui.departure_merge_identical"));
+			}
+
+			SettingsPage *wallclock = interface->Add(new SettingsPage(STR_CONFIG_SETTING_INTERFACE_WALLCLOCK));
+			{
+				wallclock->Add(new SettingEntry("gui.override_time_settings"));
+				SettingsPage *game = wallclock->Add(new SettingsPage(STR_CONFIG_SETTING_INTERFACE_TIME_SAVEGAME));
+				{
+					game->hide_callback = []() -> bool {
+						return _game_mode == GM_MENU;
+					};
+					game->Add(new SettingEntry("game_time.time_in_minutes"));
+					game->Add(new SettingEntry("game_time.ticks_per_minute"));
+					game->Add(new SettingEntry("game_time.clock_offset"));
+				}
+				SettingsPage *client = wallclock->Add(new SettingsPage(STR_CONFIG_SETTING_INTERFACE_TIME_CLIENT));
+				{
+					client->hide_callback = []() -> bool {
+						return _game_mode != GM_MENU && !_settings_client.gui.override_time_settings;
+					};
+					client->Add(new SettingEntry("gui.time_in_minutes"));
+					client->Add(new SettingEntry("gui.ticks_per_minute"));
+					client->Add(new SettingEntry("gui.clock_offset"));
+				}
+
+				wallclock->Add(new SettingEntry("gui.date_with_time"));
+			}
+
+			SettingsPage *timetable = interface->Add(new SettingsPage(STR_CONFIG_SETTING_INTERFACE_TIMETABLE));
+			{
+				timetable->Add(new SettingEntry("gui.timetable_in_ticks"));
+				timetable->Add(new SettingEntry("gui.timetable_leftover_ticks"));
+				timetable->Add(new SettingEntry("gui.timetable_arrival_departure"));
+				timetable->Add(new SettingEntry("gui.timetable_start_text_entry"));
+			}
+
+			SettingsPage *advsig = interface->Add(new SettingsPage(STR_CONFIG_SETTING_INTERFACE_ADV_SIGNALS));
+			{
+				advsig->Add(new SettingEntry("gui.show_progsig_ui"));
+				advsig->Add(new SettingEntry("gui.show_adv_tracerestrict_features"));
+			}
+
 			interface->Add(new SettingEntry("gui.autosave"));
+			interface->Add(new SettingEntry("gui.autosave_on_network_disconnect"));
+			interface->Add(new SettingEntry("gui.savegame_overwrite_confirm"));
 			interface->Add(new SettingEntry("gui.toolbar_pos"));
 			interface->Add(new SettingEntry("gui.statusbar_pos"));
 			interface->Add(new SettingEntry("gui.prefer_teamchat"));
 			interface->Add(new SettingEntry("gui.advanced_vehicle_list"));
-			interface->Add(new SettingEntry("gui.timetable_in_ticks"));
-			interface->Add(new SettingEntry("gui.timetable_arrival_departure"));
 			interface->Add(new SettingEntry("gui.expenses_layout"));
 			interface->Add(new SettingEntry("gui.show_newgrf_name"));
+			interface->Add(new SettingEntry("gui.show_train_length_in_details"));
+			interface->Add(new SettingEntry("gui.show_train_weight_ratios_in_details"));
+			interface->Add(new SettingEntry("gui.show_vehicle_group_in_details"));
+			interface->Add(new SettingEntry("gui.show_vehicle_list_company_colour"));
+			interface->Add(new SettingEntry("gui.show_veh_list_cargo_filter"));
+			interface->Add(new SettingEntry("gui.show_adv_load_mode_features"));
+			interface->Add(new SettingEntry("gui.disable_top_veh_list_mass_actions"));
+			interface->Add(new SettingEntry("gui.adv_sig_bridge_tun_modes"));
+			interface->Add(new SettingEntry("gui.show_depot_sell_gui"));
+			interface->Add(new SettingEntry("gui.open_vehicle_gui_clone_share"));
 		}
 
 		SettingsPage *advisors = main->Add(new SettingsPage(STR_CONFIG_SETTING_ADVISORS));
@@ -1581,6 +1747,7 @@ static SettingsContainer &GetSettingsTree()
 			advisors->Add(new SettingEntry("news_display.arrival_other"));
 			advisors->Add(new SettingEntry("news_display.advice"));
 			advisors->Add(new SettingEntry("gui.order_review_system"));
+			advisors->Add(new SettingEntry("gui.no_depot_order_warn"));
 			advisors->Add(new SettingEntry("gui.vehicle_income_warn"));
 			advisors->Add(new SettingEntry("gui.lost_vehicle_warn"));
 			advisors->Add(new SettingEntry("gui.show_finances"));
@@ -1610,11 +1777,22 @@ static SettingsContainer &GetSettingsTree()
 			company->Add(new SettingEntry("vehicle.servint_roadveh"));
 			company->Add(new SettingEntry("vehicle.servint_ships"));
 			company->Add(new SettingEntry("vehicle.servint_aircraft"));
+			company->Add(new SettingEntry("vehicle.auto_timetable_by_default"));
+			company->Add(new SettingEntry("vehicle.auto_separation_by_default"));
+			company->Add(new SettingEntry("auto_timetable_separation_rate"));
+			company->Add(new SettingEntry("timetable_autofill_rounding"));
+			company->Add(new SettingEntry("order_occupancy_smoothness"));
+			company->Add(new SettingEntry("company.infra_others_buy_in_depot[0]"));
+			company->Add(new SettingEntry("company.infra_others_buy_in_depot[1]"));
+			company->Add(new SettingEntry("company.infra_others_buy_in_depot[2]"));
+			company->Add(new SettingEntry("company.infra_others_buy_in_depot[3]"));
+			company->Add(new SettingEntry("company.advance_order_on_clone"));
 		}
 
 		SettingsPage *accounting = main->Add(new SettingsPage(STR_CONFIG_SETTING_ACCOUNTING));
 		{
 			accounting->Add(new SettingEntry("economy.inflation"));
+			accounting->Add(new SettingEntry("economy.day_length_factor"));
 			accounting->Add(new SettingEntry("difficulty.initial_interest"));
 			accounting->Add(new SettingEntry("difficulty.max_loan"));
 			accounting->Add(new SettingEntry("difficulty.subsidy_multiplier"));
@@ -1636,6 +1814,8 @@ static SettingsContainer &GetSettingsTree()
 				physics->Add(new SettingEntry("vehicle.roadveh_slope_steepness"));
 				physics->Add(new SettingEntry("vehicle.smoke_amount"));
 				physics->Add(new SettingEntry("vehicle.plane_speed"));
+				physics->Add(new SettingEntry("vehicle.ship_collision_avoidance"));
+				physics->Add(new SettingEntry("vehicle.roadveh_articulated_overtaking"));
 			}
 
 			SettingsPage *routing = vehicles->Add(new SettingsPage(STR_CONFIG_SETTING_VEHICLES_ROUTING));
@@ -1646,10 +1826,15 @@ static SettingsContainer &GetSettingsTree()
 				routing->Add(new SettingEntry("pf.forbid_90_deg"));
 				routing->Add(new SettingEntry("pf.pathfinder_for_roadvehs"));
 				routing->Add(new SettingEntry("pf.pathfinder_for_ships"));
+				routing->Add(new SettingEntry("pf.reroute_rv_on_layout_change"));
 			}
 
 			vehicles->Add(new SettingEntry("order.no_servicing_if_no_breakdowns"));
 			vehicles->Add(new SettingEntry("order.serviceathelipad"));
+			vehicles->Add(new SettingEntry("order.nonstop_only"));
+			vehicles->Add(new SettingEntry("vehicle.adjacent_crossings"));
+			vehicles->Add(new SettingEntry("vehicle.safer_crossings"));
+			vehicles->Add(new SettingEntry("vehicle.flip_direction_all_trains"));
 		}
 
 		SettingsPage *limitations = main->Add(new SettingsPage(STR_CONFIG_SETTING_LIMITATIONS));
@@ -1661,8 +1846,10 @@ static SettingsContainer &GetSettingsTree()
 			limitations->Add(new SettingEntry("construction.max_bridge_length"));
 			limitations->Add(new SettingEntry("construction.max_bridge_height"));
 			limitations->Add(new SettingEntry("construction.max_tunnel_length"));
+			limitations->Add(new SettingEntry("construction.chunnel"));
 			limitations->Add(new SettingEntry("station.never_expire_airports"));
 			limitations->Add(new SettingEntry("vehicle.never_expire_vehicles"));
+			limitations->Add(new SettingEntry("vehicle.no_expire_vehicles_after"));
 			limitations->Add(new SettingEntry("vehicle.max_trains"));
 			limitations->Add(new SettingEntry("vehicle.max_roadveh"));
 			limitations->Add(new SettingEntry("vehicle.max_aircraft"));
@@ -1673,6 +1860,16 @@ static SettingsContainer &GetSettingsTree()
 			limitations->Add(new SettingEntry("construction.road_stop_on_town_road"));
 			limitations->Add(new SettingEntry("construction.road_stop_on_competitor_road"));
 			limitations->Add(new SettingEntry("vehicle.disable_elrails"));
+			limitations->Add(new SettingEntry("construction.maximum_signal_evaluations"));
+			limitations->Add(new SettingEntry("construction.enable_build_river"));
+			limitations->Add(new SettingEntry("construction.enable_remove_water"));
+			limitations->Add(new SettingEntry("construction.road_custom_bridge_heads"));
+			limitations->Add(new SettingEntry("construction.rail_custom_bridge_heads"));
+			limitations->Add(new SettingEntry("construction.allow_grf_objects_under_bridges"));
+			limitations->Add(new SettingEntry("construction.allow_stations_under_bridges"));
+			limitations->Add(new SettingEntry("construction.allow_road_stops_under_bridges"));
+			limitations->Add(new SettingEntry("construction.allow_docks_under_bridges"));
+			limitations->Add(new SettingEntry("construction.purchase_land_permitted"));
 		}
 
 		SettingsPage *disasters = main->Add(new SettingsPage(STR_CONFIG_SETTING_ACCIDENTS));
@@ -1680,7 +1877,11 @@ static SettingsContainer &GetSettingsTree()
 			disasters->Add(new SettingEntry("difficulty.disasters"));
 			disasters->Add(new SettingEntry("difficulty.economy"));
 			disasters->Add(new SettingEntry("difficulty.vehicle_breakdowns"));
+			disasters->Add(new SettingEntry("vehicle.improved_breakdowns"));
+			disasters->Add(new SettingEntry("vehicle.pay_for_repair"));
+			disasters->Add(new SettingEntry("vehicle.repair_cost"));
 			disasters->Add(new SettingEntry("vehicle.plane_crashes"));
+			disasters->Add(new SettingEntry("vehicle.no_train_crash_other_company"));
 		}
 
 		SettingsPage *genworld = main->Add(new SettingsPage(STR_CONFIG_SETTING_GENWORLD));
@@ -1697,6 +1898,7 @@ static SettingsContainer &GetSettingsTree()
 			genworld->Add(new SettingEntry("economy.larger_towns"));
 			genworld->Add(new SettingEntry("economy.initial_city_size"));
 			genworld->Add(new SettingEntry("economy.town_layout"));
+			genworld->Add(new SettingEntry("economy.town_min_distance"));
 			genworld->Add(new SettingEntry("difficulty.industry_density"));
 			genworld->Add(new SettingEntry("gui.pause_on_newgame"));
 			genworld->Add(new SettingEntry("game_creation.ending_year"));
@@ -1717,10 +1919,13 @@ static SettingsContainer &GetSettingsTree()
 			SettingsPage *towns = environment->Add(new SettingsPage(STR_CONFIG_SETTING_ENVIRONMENT_TOWNS));
 			{
 				towns->Add(new SettingEntry("economy.town_growth_rate"));
+				towns->Add(new SettingEntry("economy.town_growth_cargo_transported"));
 				towns->Add(new SettingEntry("economy.allow_town_roads"));
 				towns->Add(new SettingEntry("economy.allow_town_level_crossings"));
 				towns->Add(new SettingEntry("economy.found_town"));
 				towns->Add(new SettingEntry("economy.town_cargogen_mode"));
+				towns->Add(new SettingEntry("economy.town_cargo_scale_factor"));
+				towns->Add(new SettingEntry("economy.random_road_reconstruction"));
 			}
 
 			SettingsPage *industries = environment->Add(new SettingsPage(STR_CONFIG_SETTING_ENVIRONMENT_INDUSTRIES));
@@ -1741,14 +1946,32 @@ static SettingsContainer &GetSettingsTree()
 				cdist->Add(new SettingEntry("linkgraph.distribution_mail"));
 				cdist->Add(new SettingEntry("linkgraph.distribution_armoured"));
 				cdist->Add(new SettingEntry("linkgraph.distribution_default"));
+				SettingsPage *cdist_override = cdist->Add(new SettingsPage(STR_CONFIG_SETTING_ENVIRONMENT_CARGODIST_PER_CARGO_OVERRIDE));
+				{
+					uint index = 0;
+					const SettingDesc *setting = GetSettingFromName("linkgraph.distribution_per_cargo[0]", &index);
+					for (CargoID c = 0; c < NUM_CARGO; c++) {
+						cdist_override->Add(new CargoDestPerCargoSettingEntry(c, setting + c, index + c));
+					}
+				}
 				cdist->Add(new SettingEntry("linkgraph.accuracy"));
 				cdist->Add(new SettingEntry("linkgraph.demand_distance"));
 				cdist->Add(new SettingEntry("linkgraph.demand_size"));
 				cdist->Add(new SettingEntry("linkgraph.short_path_saturation"));
+				cdist->Add(new SettingEntry("linkgraph.recalc_not_scaled_by_daylength"));
+			}
+			SettingsPage *treedist = environment->Add(new SettingsPage(STR_CONFIG_SETTING_ENVIRONMENT_TREES));
+			{
+				treedist->Add(new SettingEntry("construction.extra_tree_placement"));
+				treedist->Add(new SettingEntry("construction.trees_around_snow_line_enabled"));
+				treedist->Add(new SettingEntry("construction.trees_around_snow_line_range"));
+				treedist->Add(new SettingEntry("construction.tree_growth_rate"));
 			}
 
 			environment->Add(new SettingEntry("station.modified_catchment"));
-			environment->Add(new SettingEntry("construction.extra_tree_placement"));
+			environment->Add(new SettingEntry("station.catchment_increase"));
+			environment->Add(new SettingEntry("station.cargo_class_rating_wait_time"));
+			environment->Add(new SettingEntry("station.station_size_rating_cargo_amount"));
 		}
 
 		SettingsPage *ai = main->Add(new SettingsPage(STR_CONFIG_SETTING_AI));
@@ -1766,9 +1989,23 @@ static SettingsContainer &GetSettingsTree()
 				npc->Add(new SettingEntry("ai.ai_disable_veh_ship"));
 			}
 
+			SettingsPage *sharing = ai->Add(new SettingsPage(STR_CONFIG_SETTING_SHARING));
+			{
+				sharing->Add(new SettingEntry("economy.infrastructure_sharing[0]"));
+				sharing->Add(new SettingEntry("economy.infrastructure_sharing[1]"));
+				sharing->Add(new SettingEntry("economy.infrastructure_sharing[2]"));
+				sharing->Add(new SettingEntry("economy.infrastructure_sharing[3]"));
+				sharing->Add(new SettingEntry("economy.sharing_fee[0]"));
+				sharing->Add(new SettingEntry("economy.sharing_fee[1]"));
+				sharing->Add(new SettingEntry("economy.sharing_fee[2]"));
+				sharing->Add(new SettingEntry("economy.sharing_fee[3]"));
+				sharing->Add(new SettingEntry("economy.sharing_payment_in_debt"));
+			}
+
 			ai->Add(new SettingEntry("economy.give_money"));
 			ai->Add(new SettingEntry("economy.allow_shares"));
 			ai->Add(new SettingEntry("economy.min_years_for_shares"));
+			ai->Add(new SettingEntry("difficulty.money_cheat_in_multiplayer"));
 		}
 
 		main->Init();
@@ -2086,7 +2323,7 @@ struct GameSettingsWindow : Window {
 		int32 value = (int32)ReadValue(var, sd->save.conv);
 
 		/* clicked on the icon on the left side. Either scroller, bool on/off or dropdown */
-		if (x < SETTING_BUTTON_WIDTH && (sd->desc.flags & SGF_MULTISTRING)) {
+		if (x < SETTING_BUTTON_WIDTH && (sd->desc.flags & (SGF_MULTISTRING | SGF_ENUM))) {
 			const SettingDescBase *sdb = &sd->desc;
 			this->SetDisplayedHelpText(pe);
 
@@ -2115,8 +2352,16 @@ struct GameSettingsWindow : Window {
 					this->valuedropdown_entry->SetButtons(SEF_LEFT_DEPRESSED);
 
 					DropDownList list;
-					for (int i = sdb->min; i <= (int)sdb->max; i++) {
-						list.emplace_back(new DropDownListStringItem(sdb->str_val + i - sdb->min, i, false));
+					if (sd->desc.flags & SGF_MULTISTRING) {
+						for (int i = sdb->min; i <= (int)sdb->max; i++) {
+							int val = sd->orderproc ? sd->orderproc(i - sdb->min) : i;
+							assert_msg(val >= sdb->min && val <= (int)sdb->max, "min: %d, max: %d, val: %d", sdb->min, sdb->max, val);
+							list.emplace_back(new DropDownListStringItem(sdb->str_val + val - sdb->min, val, false));
+						}
+					} else if ((sd->desc.flags & SGF_ENUM)) {
+						for (const SettingDescEnumEntry *enumlist = sd->desc.enumlist; enumlist != nullptr && enumlist->str != STR_NULL; enumlist++) {
+							list.emplace_back(new DropDownListStringItem(enumlist->str, enumlist->val, false));
+						}
 					}
 
 					ShowDropDownListAt(this, std::move(list), value, -1, wi_rect, COLOUR_ORANGE, true);
@@ -2186,13 +2431,18 @@ struct GameSettingsWindow : Window {
 			}
 		} else {
 			/* Only open editbox if clicked for the second time, and only for types where it is sensible for. */
-			if (this->last_clicked == pe && sd->desc.cmd != SDT_BOOLX && !(sd->desc.flags & SGF_MULTISTRING)) {
+			if (this->last_clicked == pe && sd->desc.cmd != SDT_BOOLX && !(sd->desc.flags & (SGF_MULTISTRING | SGF_ENUM))) {
 				/* Show the correct currency-translated value */
 				if (sd->desc.flags & SGF_CURRENCY) value *= _currency->rate;
 
 				this->valuewindow_entry = pe;
-				SetDParam(0, value);
-				ShowQueryString(STR_JUST_INT, STR_CONFIG_SETTING_QUERY_CAPTION, 10, this, CS_NUMERAL, QSF_ENABLE_DEFAULT);
+				if (sd->desc.flags & SGF_DECIMAL1) {
+					SetDParam(0, value);
+					ShowQueryString(STR_JUST_DECIMAL1, STR_CONFIG_SETTING_QUERY_CAPTION, 10, this, CS_NUMERAL_DECIMAL, QSF_ENABLE_DEFAULT);
+				} else {
+					SetDParam(0, value);
+					ShowQueryString(STR_JUST_INT, STR_CONFIG_SETTING_QUERY_CAPTION, 10, this, CS_NUMERAL, QSF_ENABLE_DEFAULT);
+				}
 			}
 			this->SetDisplayedHelpText(pe);
 		}
@@ -2217,7 +2467,11 @@ struct GameSettingsWindow : Window {
 
 		int32 value;
 		if (!StrEmpty(str)) {
-			value = atoi(str);
+			if (sd->desc.flags & SGF_DECIMAL1) {
+				value = atof(str) * 10;
+			} else {
+				value = atoi(str);
+			}
 
 			/* Save the correct currency-translated value */
 			if (sd->desc.flags & SGF_CURRENCY) value /= _currency->rate;
@@ -2263,7 +2517,7 @@ struct GameSettingsWindow : Window {
 					/* Deal with drop down boxes on the panel. */
 					assert(this->valuedropdown_entry != nullptr);
 					const SettingDesc *sd = this->valuedropdown_entry->setting;
-					assert(sd->desc.flags & SGF_MULTISTRING);
+					assert(sd->desc.flags & (SGF_MULTISTRING | SGF_ENUM));
 
 					if ((sd->desc.flags & SGF_PER_COMPANY) != 0) {
 						SetCompanySetting(this->valuedropdown_entry->index, index);

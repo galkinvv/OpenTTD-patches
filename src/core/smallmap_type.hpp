@@ -111,7 +111,7 @@ struct SmallMap : std::vector<std::pair<T, U> > {
 	 */
 	inline bool Erase(const T &key)
 	{
-		auto *pair = this->Find(key);
+		Pair *pair = this->Find(key);
 		if (pair == this->End()) return false;
 
 		this->Erase(pair);

@@ -63,17 +63,37 @@ enum VehiclePathFinders {
 
 /** Flags to add to p1 for goto depot commands. */
 enum DepotCommand {
+	DEPOT_SELL          = (1U << 25), ///< Go to depot and sell order
+	DEPOT_CANCEL        = (1U << 26), ///< Cancel depot/service order
+	DEPOT_SPECIFIC      = (1U << 27), ///< Send vehicle to specific depot
 	DEPOT_SERVICE       = (1U << 28), ///< The vehicle will leave the depot right after arrival (service only)
 	DEPOT_MASS_SEND     = (1U << 29), ///< Tells that it's a mass send to depot command (type in VLW flag)
 	DEPOT_DONT_CANCEL   = (1U << 30), ///< Don't cancel current goto depot command if any
 	DEPOT_LOCATE_HANGAR = (1U << 31), ///< Find another airport if the target one lacks a hangar
-	DEPOT_COMMAND_MASK  = 0xFU << 28,
+	DEPOT_COMMAND_MASK  = 0x7FU << 25,
 };
 
-static const uint MAX_LENGTH_VEHICLE_NAME_CHARS = 32; ///< The maximum length of a vehicle name in characters including '\0'
+static const uint MAX_LENGTH_VEHICLE_NAME_CHARS = 128; ///< The maximum length of a vehicle name in characters including '\0'
 
 /** The length of a vehicle in tile units. */
 static const uint VEHICLE_LENGTH = 8;
+
+/**
+ * The different types of breakdowns
+ *
+ * Aircraft have totally different breakdowns, so we use aliases to make things clearer
+ */
+enum BreakdownType {
+	BREAKDOWN_CRITICAL  = 0, ///< Old style breakdown (black smoke)
+	BREAKDOWN_EM_STOP   = 1, ///< Emergency stop
+	BREAKDOWN_LOW_SPEED = 2, ///< Lower max speed
+	BREAKDOWN_LOW_POWER = 3, ///< Power reduction
+	BREAKDOWN_RV_CRASH  = 4, ///< Train hit road vehicle
+
+	BREAKDOWN_AIRCRAFT_SPEED      = BREAKDOWN_CRITICAL,  ///< Lower speed until the next airport
+	BREAKDOWN_AIRCRAFT_DEPOT      = BREAKDOWN_EM_STOP,   ///< We have to visit a depot at the next airport
+	BREAKDOWN_AIRCRAFT_EM_LANDING = BREAKDOWN_LOW_SPEED, ///< Emergency landing at the closest airport (with hangar!) we can find
+};
 
 /** Vehicle acceleration models. */
 enum AccelerationModel {

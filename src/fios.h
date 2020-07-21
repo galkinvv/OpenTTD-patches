@@ -46,6 +46,10 @@ struct LoadCheckData {
 	struct LoggedAction *gamelog_action;          ///< Gamelog actions
 	uint gamelog_actions;                         ///< Number of gamelog actions
 
+	bool want_debug_data = false;
+	std::string debug_log_data;
+	std::string debug_config_data;
+
 	LoadCheckData() : error_data(nullptr), grfconfig(nullptr),
 			grf_compatibility(GLC_NOT_FOUND), gamelog_action(nullptr), gamelog_actions(0)
 	{
@@ -95,8 +99,10 @@ enum FileSlots {
 	SOUND_SLOT     =  1,
 	/** First slot usable for (New)GRFs used during the game. */
 	FIRST_GRF_SLOT =  2,
+	/** Maximum number of GRFs in single-player */
+	MAX_NEWGRFS = 256,
 	/** Maximum number of slots. */
-	MAX_FILE_SLOTS = 128,
+	MAX_FILE_SLOTS = 300,
 };
 
 /** Deals with finding savegames */

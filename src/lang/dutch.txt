@@ -2114,7 +2114,6 @@ STR_NETWORK_COMPANY_LIST_NEW_COMPANY                            :Nieuw bedrijf
 # Network client list
 STR_NETWORK_CLIENTLIST_KICK                                     :Uit het spel schoppen
 STR_NETWORK_CLIENTLIST_BAN                                      :Verbannen
-STR_NETWORK_CLIENTLIST_GIVE_MONEY                               :Geld geven
 STR_NETWORK_CLIENTLIST_SPEAK_TO_ALL                             :Met iedereen praten
 STR_NETWORK_CLIENTLIST_SPEAK_TO_COMPANY                         :Met bedrijf praten
 STR_NETWORK_CLIENTLIST_SPEAK_TO_CLIENT                          :Privébericht
@@ -2122,8 +2121,6 @@ STR_NETWORK_CLIENTLIST_SPEAK_TO_CLIENT                          :Privébericht
 STR_NETWORK_SERVER                                              :Server
 STR_NETWORK_CLIENT                                              :Speler
 STR_NETWORK_SPECTATORS                                          :Toeschouwers
-
-STR_NETWORK_GIVE_MONEY_CAPTION                                  :{WHITE}Voer de hoeveelheid geld die je wilt geven in
 
 # Network set password
 STR_COMPANY_PASSWORD_CANCEL                                     :{BLACK}Ingevoerd wachtwoord niet opslaan
@@ -3361,6 +3358,7 @@ STR_COMPANY_VIEW_RELOCATE_HQ                                    :{BLACK}Hoofdkan
 STR_COMPANY_VIEW_RELOCATE_COMPANY_HEADQUARTERS                  :{BLACK}Hoofdkantoor verplaatsen voor 1% van de bedrijfswaarde. Shift+klik geeft de verwachte kosten zonder hoofdkantoor te verplaatsen.
 STR_COMPANY_VIEW_INFRASTRUCTURE_BUTTON                          :{BLACK}Details
 STR_COMPANY_VIEW_INFRASTRUCTURE_TOOLTIP                         :{BLACK}Gedetailleerde aantallen infrastructuur bekijken
+STR_COMPANY_VIEW_GIVE_MONEY_BUTTON                              :{BLACK}Geld geven
 
 STR_COMPANY_VIEW_NEW_FACE_BUTTON                                :{BLACK}Nieuw gezicht
 STR_COMPANY_VIEW_NEW_FACE_TOOLTIP                               :{BLACK}Nieuw gezicht voor directeur kiezen
@@ -3378,6 +3376,7 @@ STR_COMPANY_VIEW_SELL_SHARE_TOOLTIP                             :{BLACK}Verkoop 
 
 STR_COMPANY_VIEW_COMPANY_NAME_QUERY_CAPTION                     :Bedrijfsnaam
 STR_COMPANY_VIEW_PRESIDENT_S_NAME_QUERY_CAPTION                 :Naam van directeur
+STR_COMPANY_VIEW_GIVE_MONEY_QUERY_CAPTION                       :Voer de hoeveelheid geld die je wilt geven in
 
 STR_BUY_COMPANY_MESSAGE                                         :{WHITE}We zoeken een transportbedrijf dat ons bedrijf over kan nemen.{}{}Wil je {COMPANY} kopen voor {CURRENCY_LONG}?
 

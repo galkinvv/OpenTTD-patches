@@ -34,6 +34,7 @@
 #include "game/game.hpp"
 #include "goal_base.h"
 #include "story_base.h"
+#include "zoning.h"
 
 #include "table/strings.h"
 
@@ -64,6 +65,7 @@ Company::Company(uint16 name_1, bool is_ai)
 	this->terraform_limit = _settings_game.construction.terraform_frame_burst << 16;
 	this->clear_limit     = _settings_game.construction.clear_frame_burst << 16;
 	this->tree_limit      = _settings_game.construction.tree_frame_burst << 16;
+	this->purchase_land_limit = _settings_game.construction.purchase_land_frame_burst << 16;
 
 	for (uint j = 0; j < 4; j++) this->share_owners[j] = COMPANY_SPECTATOR;
 	InvalidateWindowData(WC_PERFORMANCE_DETAIL, 0, INVALID_COMPANY);
@@ -118,6 +120,7 @@ void SetLocalCompany(CompanyID new_company)
 	/* ... and redraw the whole screen. */
 	MarkWholeScreenDirty();
 	InvalidateWindowClassesData(WC_SIGN_LIST, -1);
+	ClearZoningCaches();
 }
 
 /**
@@ -181,7 +184,7 @@ void InvalidateCompanyWindows(const Company *company)
 {
 	CompanyID cid = company->index;
 
-	if (cid == _local_company) SetWindowDirty(WC_STATUS_BAR, 0);
+	if (cid == _local_company) SetWindowWidgetDirty(WC_STATUS_BAR, 0, 2);
 	SetWindowDirty(WC_FINANCES, cid);
 }
 
@@ -219,14 +222,16 @@ static void SubtractMoneyFromAnyCompany(Company *c, const CommandCost &cost)
 	if (HasBit(1 << EXPENSES_TRAIN_INC    |
 	           1 << EXPENSES_ROADVEH_INC  |
 	           1 << EXPENSES_AIRCRAFT_INC |
-	           1 << EXPENSES_SHIP_INC, cost.GetExpensesType())) {
+	           1 << EXPENSES_SHIP_INC     |
+			   1 << EXPENSES_SHARING_INC, cost.GetExpensesType())) {
 		c->cur_economy.income -= cost.GetCost();
 	} else if (HasBit(1 << EXPENSES_TRAIN_RUN    |
 	                  1 << EXPENSES_ROADVEH_RUN  |
 	                  1 << EXPENSES_AIRCRAFT_RUN |
 	                  1 << EXPENSES_SHIP_RUN     |
 	                  1 << EXPENSES_PROPERTY     |
-	                  1 << EXPENSES_LOAN_INT, cost.GetExpensesType())) {
+	                  1 << EXPENSES_LOAN_INT     |
+					  1 << EXPENSES_SHARING_COST, cost.GetExpensesType())) {
 		c->cur_economy.expenses -= cost.GetCost();
 	}
 
@@ -267,6 +272,7 @@ void UpdateLandscapingLimits()
 		c->terraform_limit = min(c->terraform_limit + _settings_game.construction.terraform_per_64k_frames, (uint32)_settings_game.construction.terraform_frame_burst << 16);
 		c->clear_limit     = min(c->clear_limit     + _settings_game.construction.clear_per_64k_frames,     (uint32)_settings_game.construction.clear_frame_burst << 16);
 		c->tree_limit      = min(c->tree_limit      + _settings_game.construction.tree_per_64k_frames,      (uint32)_settings_game.construction.tree_frame_burst << 16);
+		c->purchase_land_limit = min(c->purchase_land_limit + _settings_game.construction.purchase_land_per_64k_frames, (uint32)_settings_game.construction.purchase_land_frame_burst << 16);
 	}
 }
 
@@ -579,6 +585,8 @@ Company *DoStartupNewCompany(bool is_ai, CompanyID company = INVALID_COMPANY)
 	AI::BroadcastNewEvent(new ScriptEventCompanyNew(c->index), c->index);
 	Game::NewEvent(new ScriptEventCompanyNew(c->index));
 
+	if (!is_ai) UpdateAllTownVirtCoords();
+
 	return c;
 }
 
@@ -858,6 +866,7 @@ CommandCost CmdCompanyCtrl(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 			}
 
 			NetworkServerNewCompany(c, ci);
+			DEBUG(desync, 1, "new_company: date{%08x; %02x; %02x}, company_id: %u", _date, _date_fract, _tick_skip_counter, c->index);
 			break;
 		}
 
@@ -866,7 +875,10 @@ CommandCost CmdCompanyCtrl(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 
 			if (company_id != INVALID_COMPANY && (company_id >= MAX_COMPANIES || Company::IsValidID(company_id))) return CMD_ERROR;
 			Company *c = DoStartupNewCompany(true, company_id);
-			if (c != nullptr) NetworkServerNewCompany(c, nullptr);
+			if (c != nullptr) {
+				NetworkServerNewCompany(c, nullptr);
+				DEBUG(desync, 1, "new_company_ai: date{%08x; %02x; %02x}, company_id: %u", _date, _date_fract, _tick_skip_counter, c->index);
+			}
 			break;
 		}
 
@@ -878,6 +890,8 @@ CommandCost CmdCompanyCtrl(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 			if (c == nullptr) return CMD_ERROR;
 
 			if (!(flags & DC_EXEC)) return CommandCost();
+
+			DEBUG(desync, 1, "delete_company: date{%08x; %02x; %02x}, company_id: %u, reason: %u", _date, _date_fract, _tick_skip_counter, company_id, reason);
 
 			/* Delete any open window of the company */
 			DeleteCompanyWindows(c->index);
@@ -901,6 +915,11 @@ CommandCost CmdCompanyCtrl(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 			CompanyAdminRemove(c_index, (CompanyRemoveReason)reason);
 
 			if (StoryPage::GetNumItems() == 0 || Goal::GetNumItems() == 0) InvalidateWindowData(WC_MAIN_TOOLBAR, 0);
+
+			InvalidateWindowClassesData(WC_DEPARTURES_BOARD, 0);
+
+			extern void CheckCaches(bool force_check, std::function<void(const char *)> log);
+			CheckCaches(true, nullptr);
 			break;
 		}
 
@@ -1178,4 +1197,25 @@ uint32 CompanyInfrastructure::GetTramTotal() const
 		if (RoadTypeIsTram(rt)) total += this->road[rt];
 	}
 	return total;
+}
+
+char *CompanyInfrastructure::Dump(char *buffer, const char *last) const
+{
+	uint rail_total = 0;
+	for (RailType rt = RAILTYPE_BEGIN; rt != RAILTYPE_END; rt++) {
+		if (rail[rt]) buffer += seprintf(buffer, last, "Rail: %s: %u\n", GetStringPtr(GetRailTypeInfo(rt)->strings.name), rail[rt]);
+		rail_total += rail[rt];
+	}
+	buffer += seprintf(buffer, last, "Total Rail: %u\n", rail_total);
+	buffer += seprintf(buffer, last, "Signal: %u\n", signal);
+	for (RoadType rt = ROADTYPE_BEGIN; rt != ROADTYPE_END; rt++) {
+		if (road[rt]) buffer += seprintf(buffer, last, "%s: %s: %u\n", RoadTypeIsTram(rt) ? "Tram" : "Road", GetStringPtr(GetRoadTypeInfo(rt)->strings.name), road[rt]);
+	}
+	buffer += seprintf(buffer, last, "Total Road: %u\n", this->GetRoadTotal());
+	buffer += seprintf(buffer, last, "Total Tram: %u\n", this->GetTramTotal());
+	buffer += seprintf(buffer, last, "Water: %u\n", water);
+	buffer += seprintf(buffer, last, "Station: %u\n", station);
+	buffer += seprintf(buffer, last, "Airport: %u\n", airport);
+
+	return buffer;
 }

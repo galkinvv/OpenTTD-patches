@@ -95,6 +95,10 @@ static inline bool IsAllGroupID(GroupID id_g)
 	return id_g == ALL_GROUP;
 }
 
+static inline bool IsTopLevelGroupID(GroupID index)
+{
+	return index == DEFAULT_GROUP || index == ALL_GROUP;
+}
 
 uint GetGroupNumEngines(CompanyID company, GroupID id_g, EngineID id_e);
 uint GetGroupNumVehicle(CompanyID company, GroupID id_g, VehicleType type);

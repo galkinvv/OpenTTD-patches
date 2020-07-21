@@ -24,6 +24,8 @@
 #include "tilehighlight_func.h"
 #include "window_gui.h"
 #include "vehiclelist.h"
+#include "company_base.h"
+#include "infrastructure_func.h"
 #include "order_backup.h"
 #include "zoom_func.h"
 
@@ -740,7 +742,7 @@ struct DepotWindow : Window {
 
 		/* Setup disabled buttons. */
 		TileIndex tile = this->window_number;
-		this->SetWidgetsDisabledState(!IsTileOwner(tile, _local_company),
+		this->SetWidgetsDisabledState(!Company::IsValidID(_local_company) || !IsInfraTileUsageAllowed(this->type, _local_company, tile),
 			WID_D_STOP_ALL,
 			WID_D_START_ALL,
 			WID_D_SELL,
@@ -907,7 +909,8 @@ struct DepotWindow : Window {
 	{
 		if (_ctrl_pressed) {
 			/* Share-clone, do not open new viewport, and keep tool active */
-			DoCommandP(this->window_number, v->index, 1, CMD_CLONE_VEHICLE | CMD_MSG(STR_ERROR_CAN_T_BUY_TRAIN + v->type), nullptr);
+			DoCommandP(this->window_number, v->index, 1, CMD_CLONE_VEHICLE | CMD_MSG(STR_ERROR_CAN_T_BUY_TRAIN + v->type),
+					_settings_client.gui.open_vehicle_gui_clone_share ? CcCloneVehicle : nullptr);
 		} else {
 			/* Copy-clone, open viewport for new vehicle, and deselect the tool (assume player wants to changs things on new vehicle) */
 			if (DoCommandP(this->window_number, v->index, 0, CMD_CLONE_VEHICLE | CMD_MSG(STR_ERROR_CAN_T_BUY_TRAIN + v->type), CcCloneVehicle)) {

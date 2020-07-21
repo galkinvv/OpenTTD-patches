@@ -17,6 +17,8 @@
 /** Factory for the null video driver. */
 static FVideoDriver_Null iFVideoDriver_Null;
 
+extern bool _exit_game;
+
 const char *VideoDriver_Null::Start(const StringList &parm)
 {
 #ifdef _MSC_VER
@@ -25,6 +27,7 @@ const char *VideoDriver_Null::Start(const StringList &parm)
 #endif
 
 	this->ticks = GetDriverParamInt(parm, "ticks", 1000);
+	this->until_exit = GetDriverParamBool(parm, "until_exit");
 	_screen.width  = _screen.pitch = _cur_resolution.width;
 	_screen.height = _cur_resolution.height;
 	_screen.dst_ptr = nullptr;
@@ -42,11 +45,18 @@ void VideoDriver_Null::MakeDirty(int left, int top, int width, int height) {}
 
 void VideoDriver_Null::MainLoop()
 {
-	uint i;
-
-	for (i = 0; i < this->ticks; i++) {
-		GameLoop();
-		UpdateWindows();
+	if (this->until_exit) {
+		while (!_exit_game) {
+			GameLoop();
+			GameLoopPaletteAnimations();
+			UpdateWindows();
+		}
+	} else {
+		for (int i = 0; i < this->ticks; i++) {
+			GameLoop();
+			GameLoopPaletteAnimations();
+			UpdateWindows();
+		}
 	}
 }
 

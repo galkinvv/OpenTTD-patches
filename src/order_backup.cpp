@@ -63,6 +63,15 @@ OrderBackup::OrderBackup(const Vehicle *v, uint32 user)
 			*tail = copy;
 			tail = &copy->next;
 		}
+
+		if (v->orders.list != nullptr && HasBit(v->vehicle_flags, VF_SCHEDULED_DISPATCH)) {
+			SetBit(this->vehicle_flags, VF_SCHEDULED_DISPATCH);
+			this->scheduled_dispatch = v->orders.list->GetScheduledDispatch();
+			this->scheduled_dispatch_duration = v->orders.list->GetScheduledDispatchDuration();
+			this->scheduled_dispatch_start_date = v->orders.list->GetScheduledDispatchStartDatePart();
+			this->scheduled_dispatch_start_full_date_fract = v->orders.list->GetScheduledDispatchStartDateFractPart();
+			this->scheduled_dispatch_max_delay = v->orders.list->GetScheduledDispatchDelay();
+		}
 	}
 }
 
@@ -78,6 +87,17 @@ void OrderBackup::DoRestore(Vehicle *v)
 	} else if (this->orders != nullptr && OrderList::CanAllocateItem()) {
 		v->orders.list = new OrderList(this->orders, v);
 		this->orders = nullptr;
+
+		if (HasBit(this->vehicle_flags, VF_SCHEDULED_DISPATCH)) {
+			SetBit(v->vehicle_flags, VF_SCHEDULED_DISPATCH);
+			v->orders.list->SetScheduledDispatchDuration(this->scheduled_dispatch_duration);
+			v->orders.list->SetScheduledDispatchDelay(this->scheduled_dispatch_max_delay);
+			v->orders.list->SetScheduledDispatchStartDate(this->scheduled_dispatch_start_date,
+					this->scheduled_dispatch_start_full_date_fract);
+			v->orders.list->SetScheduledDispatchLastDispatch(0);
+			v->orders.list->SetScheduledDispatch(std::move(this->scheduled_dispatch));
+		}
+
 		/* Make sure buoys/oil rigs are updated in the station list. */
 		InvalidateWindowClassesData(WC_STATION_LIST, 0);
 	}
@@ -87,6 +107,7 @@ void OrderBackup::DoRestore(Vehicle *v)
 	/* Make sure orders are in range */
 	v->UpdateRealOrderIndex();
 	if (v->cur_implicit_order_index >= v->GetNumOrders()) v->cur_implicit_order_index = v->cur_real_order_index;
+	if (v->cur_timetable_order_index >= v->GetNumOrders()) v->cur_timetable_order_index = INVALID_VEH_ORDER_ID;
 
 	/* Restore vehicle group */
 	DoCommand(0, this->group, v->index, DC_EXEC, CMD_ADD_VEHICLE_GROUP);
@@ -199,7 +220,7 @@ CommandCost CmdClearOrderBackup(TileIndex tile, DoCommandFlag flags, uint32 p1, 
 			/* We need to circumvent the "prevention" from this command being executed
 			 * while the game is paused, so use the internal method. Nor do we want
 			 * this command to get its cost estimated when shift is pressed. */
-			DoCommandPInternal(ob->tile, 0, user, CMD_CLEAR_ORDER_BACKUP, nullptr, nullptr, true, false);
+			DoCommandPInternal(ob->tile, 0, user, CMD_CLEAR_ORDER_BACKUP, nullptr, nullptr, true, false, 0);
 		} else {
 			/* The command came from the game logic, i.e. the clearing of a tile.
 			 * In that case we have no need to actually sync this, just do it. */

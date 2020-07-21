@@ -39,12 +39,13 @@
 void Waypoint::UpdateVirtCoord()
 {
 	Point pt = RemapCoords2(TileX(this->xy) * TILE_SIZE, TileY(this->xy) * TILE_SIZE);
-	if (this->sign.kdtree_valid) _viewport_sign_kdtree.Remove(ViewportSignKdtreeItem::MakeWaypoint(this->index));
+	if (_viewport_sign_kdtree_valid && this->sign.kdtree_valid) _viewport_sign_kdtree.Remove(ViewportSignKdtreeItem::MakeWaypoint(this->index));
 
 	SetDParam(0, this->index);
-	this->sign.UpdatePosition(pt.x, pt.y - 32 * ZOOM_LVL_BASE, STR_VIEWPORT_WAYPOINT);
+	bool shown = HasBit(_display_opt, DO_SHOW_WAYPOINT_NAMES) && !(_local_company != this->owner && this->owner != OWNER_NONE && !HasBit(_display_opt, DO_SHOW_COMPETITOR_SIGNS));
+	this->sign.UpdatePosition(shown ? ZOOM_LVL_DRAW_SPR : ZOOM_LVL_END, pt.x, pt.y - 32 * ZOOM_LVL_BASE, STR_VIEWPORT_WAYPOINT);
 
-	_viewport_sign_kdtree.Insert(ViewportSignKdtreeItem::MakeWaypoint(this->index));
+	if (_viewport_sign_kdtree_valid) _viewport_sign_kdtree.Insert(ViewportSignKdtreeItem::MakeWaypoint(this->index));
 
 	/* Recenter viewport */
 	InvalidateWindowData(WC_WAYPOINT_VIEW, this->index);
@@ -148,14 +149,13 @@ static CommandCost IsValidTileForWaypoint(TileIndex tile, Axis axis, StationID *
 		return_cmd_error(STR_ERROR_FLAT_LAND_REQUIRED);
 	}
 
-	if (IsBridgeAbove(tile)) return_cmd_error(STR_ERROR_MUST_DEMOLISH_BRIDGE_FIRST);
-
 	return CommandCost();
 }
 
 extern void GetStationLayout(byte *layout, int numtracks, int plat_len, const StationSpec *statspec);
 extern CommandCost FindJoiningWaypoint(StationID existing_station, StationID station_to_join, bool adjacent, TileArea ta, Waypoint **wp);
 extern CommandCost CanExpandRailStation(const BaseStation *st, TileArea &new_ta, Axis axis);
+extern CommandCost IsRailStationBridgeAboveOk(TileIndex tile, const StationSpec *statspec, byte layout);
 
 /**
  * Convert existing rail to waypoint. Eg build a waypoint station over
@@ -202,6 +202,16 @@ CommandCost CmdBuildRailWaypoint(TileIndex start_tile, DoCommandFlag flags, uint
 
 	if (distant_join && (!_settings_game.station.distant_join_stations || !Waypoint::IsValidID(station_to_join))) return CMD_ERROR;
 
+	const StationSpec *spec = StationClass::Get(spec_class)->GetSpec(spec_index);
+	byte *layout_ptr = AllocaM(byte, count);
+	if (spec == nullptr) {
+		/* The layout must be 0 for the 'normal' waypoints by design. */
+		memset(layout_ptr, 0, count);
+	} else {
+		/* But for NewGRF waypoints we like to have their style. */
+		GetStationLayout(layout_ptr, count, 1, spec);
+	}
+
 	/* Make sure the area below consists of clear tiles. (OR tiles belonging to a certain rail station) */
 	StationID est = INVALID_STATION;
 
@@ -211,6 +221,10 @@ CommandCost CmdBuildRailWaypoint(TileIndex start_tile, DoCommandFlag flags, uint
 		TileIndex tile = start_tile + i * offset;
 		CommandCost ret = IsValidTileForWaypoint(tile, axis, &est);
 		if (ret.Failed()) return ret;
+		ret = IsRailStationBridgeAboveOk(tile, spec, layout_ptr[i]);
+		if (ret.Failed()) {
+			return CommandCost::DualErrorMessage(STR_ERROR_MUST_DEMOLISH_BRIDGE_FIRST, ret.GetErrorMessage());
+		}
 	}
 
 	Waypoint *wp = nullptr;
@@ -260,15 +274,6 @@ CommandCost CmdBuildRailWaypoint(TileIndex start_tile, DoCommandFlag flags, uint
 
 		wp->UpdateVirtCoord();
 
-		const StationSpec *spec = StationClass::Get(spec_class)->GetSpec(spec_index);
-		byte *layout_ptr = AllocaM(byte, count);
-		if (spec == nullptr) {
-			/* The layout must be 0 for the 'normal' waypoints by design. */
-			memset(layout_ptr, 0, count);
-		} else {
-			/* But for NewGRF waypoints we like to have their style. */
-			GetStationLayout(layout_ptr, count, 1, spec);
-		}
 		byte map_spec_index = AllocateSpecToStation(spec, wp, true);
 
 		Company *c = Company::Get(wp->owner);
@@ -282,7 +287,7 @@ CommandCost CmdBuildRailWaypoint(TileIndex start_tile, DoCommandFlag flags, uint
 			MakeRailWaypoint(tile, wp->owner, wp->index, axis, layout_ptr[i], GetRailType(tile));
 			SetCustomStationSpecIndex(tile, map_spec_index);
 			SetRailStationReservation(tile, reserved);
-			MarkTileDirtyByTile(tile);
+			MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 
 			DeallocateSpecFromStation(wp, old_specindex);
 			YapfNotifyTrackLayoutChange(tile, AxisToTrack(axis));
@@ -305,7 +310,6 @@ CommandCost CmdBuildRailWaypoint(TileIndex start_tile, DoCommandFlag flags, uint
 CommandCost CmdBuildBuoy(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
 {
 	if (tile == 0 || !HasTileWaterGround(tile)) return_cmd_error(STR_ERROR_SITE_UNSUITABLE);
-	if (IsBridgeAbove(tile)) return_cmd_error(STR_ERROR_MUST_DEMOLISH_BRIDGE_FIRST);
 
 	if (!IsTileFlat(tile)) return_cmd_error(STR_ERROR_SITE_UNSUITABLE);
 

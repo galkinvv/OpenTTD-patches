@@ -15,6 +15,7 @@
 #include "config.h"
 #include "core.h"
 #include "../../string_type.h"
+#include <string>
 
 typedef uint16 PacketSize; ///< Size of the whole packet.
 typedef uint8  PacketType; ///< Identifier for the packet
@@ -38,8 +39,6 @@ typedef uint8  PacketType; ///< Identifier for the packet
  *     (year % 4 == 0) and ((year % 100 != 0) or (year % 400 == 0))
  */
 struct Packet {
-	/** The next packet. Used for queueing packets before sending. */
-	Packet *next;
 	/**
 	 * The size of the whole packet for received packets. For packets
 	 * that will be sent, the value is filled in just before the
@@ -48,7 +47,7 @@ struct Packet {
 	PacketSize size;
 	/** The current read/write position in the packet */
 	PacketSize pos;
-	/** The buffer of this packet, of basically variable length up to SEND_MTU. */
+	/** The buffer of this packet, of basically variable length up to SHRT_MAX. */
 	byte *buffer;
 
 private:
@@ -60,6 +59,8 @@ public:
 	Packet(PacketType type);
 	~Packet();
 
+	void ResetState(PacketType type);
+
 	/* Sending/writing of packets */
 	void PrepareToSend();
 
@@ -69,18 +70,22 @@ public:
 	void Send_uint32(uint32 data);
 	void Send_uint64(uint64 data);
 	void Send_string(const char *data);
+	void Send_binary(const char *data, const size_t size);
 
 	/* Reading/receiving of packets */
 	void ReadRawPacketSize();
 	void PrepareToRead();
 
-	bool   CanReadFromPacket (uint bytes_to_read);
+	bool   CanReadFromPacket (uint bytes_to_read, bool non_fatal = false);
 	bool   Recv_bool  ();
 	uint8  Recv_uint8 ();
 	uint16 Recv_uint16();
 	uint32 Recv_uint32();
 	uint64 Recv_uint64();
 	void   Recv_string(char *buffer, size_t size, StringValidationSettings settings = SVS_REPLACE_WITH_QUESTION_MARK);
+	void   Recv_string(std::string &buffer, StringValidationSettings settings = SVS_REPLACE_WITH_QUESTION_MARK);
+	void   Recv_binary(char *buffer, size_t size);
+	void   Recv_binary(std::string &buffer, size_t size);
 };
 
 #endif /* NETWORK_CORE_PACKET_H */

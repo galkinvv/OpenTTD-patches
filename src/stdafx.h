@@ -111,30 +111,26 @@
 #endif
 
 /* Stuff for GCC */
-#if defined(__GNUC__)
-#	define NORETURN __attribute__ ((noreturn))
-#	define CDECL
-#	define __int64 long long
+#if defined(__GNUC__) || defined(__clang__)
+	#define NORETURN __attribute__ ((noreturn))
+	#define CDECL
+	#define __int64 long long
 	/* Warn about functions using 'printf' format syntax. First argument determines which parameter
 	 * is the format string, second argument is start of values passed to printf. */
-#	define WARN_FORMAT(string, args) __attribute__ ((format (printf, string, args)))
-#	if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 7)
-#		define FINAL final
-#	else
-#		define FINAL
-#	endif
+	#define WARN_FORMAT(string, args) __attribute__ ((format (printf, string, args)))
+	#define FINAL final
 
 	/* Use fallthrough attribute where supported */
-#	if __GNUC__ >= 7
-#		if __cplusplus > 201402L // C++17
-#			define FALLTHROUGH [[fallthrough]]
-#		else
-#			define FALLTHROUGH __attribute__((fallthrough))
-#		endif
-#	else
-#		define FALLTHROUGH
-#	endif
-#endif /* __GNUC__ */
+	#if __GNUC__ >= 7
+		#if __cplusplus > 201402L // C++17
+			#define FALLTHROUGH [[fallthrough]]
+		#else
+			#define FALLTHROUGH __attribute__((fallthrough))
+		#endif
+	#else
+		#define FALLTHROUGH
+	#endif
+#endif /* __GNUC__ || __clang__ */
 
 #if defined(__WATCOMC__)
 #	define NORETURN
@@ -166,44 +162,44 @@
 #	else
 		/* Define a win32 target platform, to override defaults of the SDK
 		 * We need to define NTDDI version for Vista SDK, but win2k is minimum */
-#		define NTDDI_VERSION NTDDI_WIN2K // Windows 2000
-#		define _WIN32_WINNT 0x0500       // Windows 2000
-#		define _WIN32_WINDOWS 0x400      // Windows 95
-#		define WINVER 0x0400             // Windows NT 4.0 / Windows 95
-#		define _WIN32_IE_ 0x0401         // 4.01 (win98 and NT4SP5+)
-#	endif
-#	define NOMINMAX                // Disable min/max macros in windows.h.
+		#define NTDDI_VERSION NTDDI_WIN2K // Windows 2000
+		#define _WIN32_WINNT 0x0500       // Windows 2000
+		#define _WIN32_WINDOWS 0x400      // Windows 95
+		#define WINVER 0x0400             // Windows NT 4.0 / Windows 95
+		#define _WIN32_IE_ 0x0401         // 4.01 (win98 and NT4SP5+)
+	#endif
+	#define NOMINMAX                // Disable min/max macros in windows.h.
 
-#	pragma warning(disable: 4244)  // 'conversion' conversion from 'type1' to 'type2', possible loss of data
-#	pragma warning(disable: 4761)  // integral size mismatch in argument : conversion supplied
-#	pragma warning(disable: 4200)  // nonstandard extension used : zero-sized array in struct/union
-#	pragma warning(disable: 4355)  // 'this' : used in base member initializer list
+	#pragma warning(disable: 4244)  // 'conversion' conversion from 'type1' to 'type2', possible loss of data
+	#pragma warning(disable: 4761)  // integral size mismatch in argument : conversion supplied
+	#pragma warning(disable: 4200)  // nonstandard extension used : zero-sized array in struct/union
+	#pragma warning(disable: 4355)  // 'this' : used in base member initializer list
 
-#	if (_MSC_VER < 1400)                   // MSVC 2005 safety checks
-#		error "Only MSVC 2005 or higher are supported. MSVC 2003 and earlier are not! Upgrade your compiler."
-#	endif /* (_MSC_VER < 1400) */
-#	pragma warning(disable: 4291)   // no matching operator delete found; memory will not be freed if initialization throws an exception (reason: our overloaded functions never throw an exception)
-#	pragma warning(disable: 4996)   // 'function': was declared deprecated
-#	pragma warning(disable: 6308)   // code analyzer: 'realloc' might return null pointer: assigning null pointer to 't_ptr', which is passed as an argument to 'realloc', will cause the original memory block to be leaked
-#	pragma warning(disable: 6011)   // code analyzer: Dereferencing NULL pointer 'pfGetAddrInfo': Lines: 995, 996, 998, 999, 1001
-#	pragma warning(disable: 6326)   // code analyzer: potential comparison of a constant with another constant
-#	pragma warning(disable: 6031)   // code analyzer: Return value ignored: 'ReadFile'
-#	pragma warning(disable: 6255)   // code analyzer: _alloca indicates failure by raising a stack overflow exception. Consider using _malloca instead
-#	pragma warning(disable: 6246)   // code analyzer: Local declaration of 'statspec' hides declaration of the same name in outer scope. For additional information, see previous declaration at ...
+	#if (_MSC_VER < 1400)                   // MSVC 2005 safety checks
+		#error "Only MSVC 2005 or higher are supported. MSVC 2003 and earlier are not! Upgrade your compiler."
+	#endif /* (_MSC_VER < 1400) */
+	#pragma warning(disable: 4291)   // no matching operator delete found; memory will not be freed if initialization throws an exception (reason: our overloaded functions never throw an exception)
+	#pragma warning(disable: 4996)   // 'function': was declared deprecated
+	#pragma warning(disable: 6308)   // code analyzer: 'realloc' might return null pointer: assigning null pointer to 't_ptr', which is passed as an argument to 'realloc', will cause the original memory block to be leaked
+	#pragma warning(disable: 6011)   // code analyzer: Dereferencing nullptr pointer 'pfGetAddrInfo': Lines: 995, 996, 998, 999, 1001
+	#pragma warning(disable: 6326)   // code analyzer: potential comparison of a constant with another constant
+	#pragma warning(disable: 6031)   // code analyzer: Return value ignored: 'ReadFile'
+	#pragma warning(disable: 6255)   // code analyzer: _alloca indicates failure by raising a stack overflow exception. Consider using _malloca instead
+	#pragma warning(disable: 6246)   // code analyzer: Local declaration of 'statspec' hides declaration of the same name in outer scope. For additional information, see previous declaration at ...
 
-#	if (_MSC_VER == 1500)           // Addresses item #13 on http://blogs.msdn.com/b/vcblog/archive/2008/08/11/tr1-fixes-in-vc9-sp1.aspx, for Visual Studio 2008
-#		define _DO_NOT_DECLARE_INTERLOCKED_INTRINSICS_IN_MEMORY
-#		include <intrin.h>
-#	endif
+	#if (_MSC_VER == 1500)           // Addresses item #13 on http://blogs.msdn.com/b/vcblog/archive/2008/08/11/tr1-fixes-in-vc9-sp1.aspx, for Visual Studio 2008
+		#define _DO_NOT_DECLARE_INTERLOCKED_INTRINSICS_IN_MEMORY
+		#include <intrin.h>
+	#endif
 
-#	include <malloc.h> // alloca()
-#	define NORETURN __declspec(noreturn)
-#	if (_MSC_VER < 1900)
-#		define inline __forceinline
-#	endif
+	#include <malloc.h> // alloca()
+	#define NORETURN __declspec(noreturn)
+	#if (_MSC_VER < 1900)
+		#define inline __forceinline
+	#endif
 
-#	define CDECL _cdecl
-#	define WARN_FORMAT(string, args)
+	#define CDECL _cdecl
+	#define WARN_FORMAT(string, args)
 #	ifndef __clang__
 #		define FINAL sealed
 #	else
@@ -303,11 +299,13 @@
 /* MSVCRT of course has to have a different syntax for long long *sigh* */
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #   define OTTD_PRINTF64 "%I64d"
+#   define OTTD_PRINTF64U "%I64u"
 #   define OTTD_PRINTFHEX64 "%I64x"
 #   define PRINTF_SIZE "%Iu"
 #   define PRINTF_SIZEX "%IX"
 #else
 #   define OTTD_PRINTF64 "%lld"
+#   define OTTD_PRINTF64U "%llu"
 #   define OTTD_PRINTFHEX64 "%llx"
 #   define PRINTF_SIZE "%zu"
 #   define PRINTF_SIZEX "%zX"
@@ -348,20 +346,8 @@ typedef unsigned char byte;
 #	define PERSONAL_DIR ""
 #endif
 
-/* Compile time assertions. Prefer c++0x static_assert().
- * Older compilers cannot evaluate some expressions at compile time,
- * typically when templates are involved, try assert_tcompile() in those cases. */
-#if __cplusplus >= 201103L || (defined(_MSC_VER) && _MSC_VER >= 1600)
-#	define assert_compile(expr) static_assert(expr, #expr )
-#	define assert_tcompile(expr) assert_compile(expr)
-#elif defined(__OS2__)
-	/* Disabled for OS/2 */
-#	define assert_compile(expr)
-#	define assert_tcompile(expr) assert_compile(expr)
-#else
-#	define assert_compile(expr) typedef int __ct_assert__[1 - 2 * !(expr)]
-#	define assert_tcompile(expr) assert(expr)
-#endif
+#define assert_compile(expr) static_assert(expr, #expr )
+#define assert_tcompile(expr) assert_compile(expr)
 
 /* Check if the types have the bitsizes like we are using them */
 assert_compile(sizeof(uint64) == 8);
@@ -430,19 +416,46 @@ assert_compile(SIZE_MAX >= UINT32_MAX);
 #	define CloseConnection OTTD_CloseConnection
 #endif /* __APPLE__ */
 
+#if defined(__GNUC__) || defined(__clang__)
+#define likely(x)       __builtin_expect(!!(x), 1)
+#define unlikely(x)     __builtin_expect(!!(x), 0)
+#else
+#define likely(x)       (x)
+#define unlikely(x)     (x)
+#endif /* __GNUC__ || __clang__ */
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((aligned(1))) typedef uint16 unaligned_uint16;
+__attribute__((aligned(1))) typedef uint32 unaligned_uint32;
+__attribute__((aligned(1))) typedef uint64 unaligned_uint64;
+#else
+typedef uint16 unaligned_uint16;
+typedef uint32 unaligned_uint32;
+typedef uint64 unaligned_uint64;
+#endif /* __GNUC__ || __clang__ */
+
 void NORETURN CDECL usererror(const char *str, ...) WARN_FORMAT(1, 2);
 void NORETURN CDECL error(const char *str, ...) WARN_FORMAT(1, 2);
+void NORETURN CDECL assert_msg_error(int line, const char *file, const char *expr, const char *extra, const char *str, ...) WARN_FORMAT(5, 6);
+const char *assert_tile_info(uint32 tile);
 #define NOT_REACHED() error("NOT_REACHED triggered at line %i of %s", __LINE__, __FILE__)
 
 /* For non-debug builds with assertions enabled use the special assertion handler. */
 #if defined(NDEBUG) && defined(WITH_ASSERT)
-#	undef assert
-#	define assert(expression) if (!(expression)) error("Assertion failed at line %i of %s: %s", __LINE__, __FILE__, #expression);
+	#undef assert
+	#define assert(expression) if (unlikely(!(expression))) error("Assertion failed at line %i of %s: %s", __LINE__, __FILE__, #expression);
 #endif
 
 /* Asserts are enabled if NDEBUG isn't defined or WITH_ASSERT is defined. */
 #if !defined(NDEBUG) || defined(WITH_ASSERT)
-#	define OTTD_ASSERT
+	#define OTTD_ASSERT
+	#define assert_msg(expression, ...) if (unlikely(!(expression))) assert_msg_error(__LINE__, __FILE__, #expression, nullptr, __VA_ARGS__);
+	#define assert_msg_tile(expression, tile, ...) if (unlikely(!(expression))) assert_msg_error(__LINE__, __FILE__, #expression, assert_tile_info(tile), __VA_ARGS__);
+	#define assert_tile(expression, tile) if (unlikely(!(expression))) error("Assertion failed at line %i of %s: %s\n\t%s", __LINE__, __FILE__, #expression, assert_tile_info(tile));
+#else
+	#define assert_msg(expression, ...)
+	#define assert_msg_tile(expression, tile, ...)
+	#define assert_tile(expression, tile)
 #endif
 
 #if defined(OPENBSD)
@@ -495,5 +508,31 @@ static inline void free(const void *ptr)
 #	define IGNORE_UNINITIALIZED_WARNING_START
 #	define IGNORE_UNINITIALIZED_WARNING_STOP
 #endif
+
+/*
+ * Define for the override keyword.
+ */
+#define OVERRIDE override
+
+/**
+ * Using _mm_prefetch() with gcc implies the compile flag -msse.
+ * This is not the case with __builtin_prefetch() so the latter can be used in normal .cpp files.
+ */
+#if defined(_MSC_VER)
+	#define INCLUDE_FOR_PREFETCH_NTA <xmmintrin.h>
+	#define PREFETCH_NTA(address) _mm_prefetch((const char *) (address), _MM_HINT_NTA);
+#elif defined(__GNUC__) || defined(__clang__)
+	#define INCLUDE_FOR_PREFETCH_NTA "stdafx.h"
+	#define PREFETCH_NTA(address) __builtin_prefetch((const void *) (address), 0, 0);
+#else
+	#define INCLUDE_FOR_PREFETCH_NTA "stdafx.h"
+	#define PREFETCH_NTA(address)
+#endif
+
+#if !defined(DISABLE_SCOPE_INFO) && (__cplusplus >= 201103L || defined(__STDCXX_VERSION__) || defined(__GXX_EXPERIMENTAL_CXX0X__) || defined(__GXX_EXPERIMENTAL_CPP0X__))
+#define USE_SCOPE_INFO
+#endif
+
+#define SINGLE_ARG(...) __VA_ARGS__
 
 #endif /* STDAFX_H */

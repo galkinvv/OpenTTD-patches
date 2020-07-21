@@ -19,15 +19,15 @@
 
 #include "table/strings.h"
 
-#include <map>
-#include <set>
+#include "3rdparty/cpp-btree/btree_set.h"
+#include "3rdparty/cpp-btree/btree_map.h"
 
 #include "safeguards.h"
 
 /** Set of tiles. */
-typedef std::set<TileIndex> TileIndexSet;
+typedef btree::btree_set<TileIndex> TileIndexSet;
 /** Mapping of tiles to their height. */
-typedef std::map<TileIndex, int> TileIndexToHeightMap;
+typedef btree::btree_map<TileIndex, int> TileIndexToHeightMap;
 
 /** State of the terraforming. */
 struct TerraformerState {
@@ -268,7 +268,7 @@ CommandCost CmdTerraformLand(TileIndex tile, DoCommandFlag flags, uint32 p1, uin
 					}
 				}
 				/* Check if tunnel would take damage */
-				if (direction == -1 && IsTunnelInWay(tile, z_min)) {
+				if (direction == -1 && IsTunnelInWay(tile, z_min, ITIWF_IGNORE_CHUNNEL)) {
 					_terraform_err_tile = tile; // highlight the tile above the tunnel
 					return_cmd_error(STR_ERROR_EXCAVATION_WOULD_DAMAGE);
 				}
@@ -312,7 +312,7 @@ CommandCost CmdTerraformLand(TileIndex tile, DoCommandFlag flags, uint32 p1, uin
 			MarkTileDirtyByTile(*it);
 			TileIndexToHeightMap::const_iterator new_height = ts.tile_to_new_height.find(tile);
 			if (new_height == ts.tile_to_new_height.end()) continue;
-			MarkTileDirtyByTile(*it, 0, new_height->second);
+			MarkTileDirtyByTile(*it, ZOOM_LVL_END, 0, new_height->second);
 		}
 
 		/* change the height */

@@ -12,6 +12,9 @@
 
 #include "road_map.h"
 
+typedef uint32 TunnelID; ///< Type for the unique identifier of tunnels.
+
+static const TunnelID TUNNEL_ID_MAP_LOOKUP = 0xFFFF; ///< Sentinel ID value to store in m2 to indiciate that the ID should be looked up instead
 
 /**
  * Is this a tunnel (entrance)?
@@ -21,7 +24,7 @@
  */
 static inline bool IsTunnel(TileIndex t)
 {
-	assert(IsTileType(t, MP_TUNNELBRIDGE));
+	assert_tile(IsTileType(t, MP_TUNNELBRIDGE), t);
 	return !HasBit(_m[t].m5, 7);
 }
 
@@ -35,22 +38,92 @@ static inline bool IsTunnelTile(TileIndex t)
 	return IsTileType(t, MP_TUNNELBRIDGE) && IsTunnel(t);
 }
 
+/**
+ * Get the index of tunnel tile.
+ * @param t the tile
+ * @pre IsTunnelTile(t)
+ * @return TunnelID
+ */
+static inline TunnelID GetTunnelIndex(TileIndex t)
+{
+	extern TunnelID GetTunnelIndexByLookup(TileIndex t);
+
+	assert_tile(IsTunnelTile(t), t);
+	TunnelID map_id = _m[t].m2;
+	return map_id == TUNNEL_ID_MAP_LOOKUP ? GetTunnelIndexByLookup(t) : map_id;
+}
+
+/**
+ * Checks if this tile is a rail tunnel
+ * @param t the tile that might be a rail tunnel
+ * @return true if it is a rail tunnel
+ */
+static inline bool IsRailTunnelTile(TileIndex t)
+{
+	return IsTunnelTile(t) && (TransportType)GB(_m[t].m5, 2, 2) == TRANSPORT_RAIL;
+}
+
+/**
+ * Get the reservation state of the rail tunnel
+ * @pre IsRailTunnelTile(t)
+ * @param t the tile
+ * @return reservation state
+ */
+static inline bool HasTunnelReservation(TileIndex t)
+{
+	assert_tile(IsRailTunnelTile(t), t);
+	return HasBit(_m[t].m5, 4);
+}
+
+/**
+ * Set the reservation state of the rail tunnel
+ * @pre IsRailTunnelTile(t)
+ * @param t the tile
+ * @param b the reservation state
+ */
+static inline void SetTunnelReservation(TileIndex t, bool b)
+{
+	assert_tile(IsRailTunnelTile(t), t);
+	SB(_m[t].m5, 4, 1, b ? 1 : 0);
+}
+
 TileIndex GetOtherTunnelEnd(TileIndex);
-bool IsTunnelInWay(TileIndex, int z);
-bool IsTunnelInWayDir(TileIndex tile, int z, DiagDirection dir);
+
+/** Flags for miscellaneous industry tile specialities */
+enum IsTunnelInWayFlags {
+	ITIWF_NONE                  = 0,
+	ITIWF_IGNORE_CHUNNEL        = 1 << 0, ///< Chunnel mid-parts are ignored, used when terraforming.
+	ITIWF_CHUNNEL_ONLY          = 1 << 1, ///< Only check for chunnels
+};
+DECLARE_ENUM_AS_BIT_SET(IsTunnelInWayFlags)
+
+bool IsTunnelInWay(TileIndex, int z, IsTunnelInWayFlags flags = ITIWF_NONE);
+
+/**
+ * Set the index of tunnel tile.
+ * @param t the tile
+ * @param id the tunnel ID
+ * @pre IsTunnelTile(t)
+ */
+static inline void SetTunnelIndex(TileIndex t, TunnelID id)
+{
+	assert_tile(IsTunnelTile(t), t);
+	_m[t].m2 = (id >= TUNNEL_ID_MAP_LOOKUP) ? TUNNEL_ID_MAP_LOOKUP : id;
+}
 
 /**
  * Makes a road tunnel entrance
  * @param t the entrance of the tunnel
  * @param o the owner of the entrance
+ * @param id the tunnel ID
  * @param d the direction facing out of the tunnel
  * @param r the road type used in the tunnel
  */
-static inline void MakeRoadTunnel(TileIndex t, Owner o, DiagDirection d, RoadType road_rt, RoadType tram_rt)
+static inline void MakeRoadTunnel(TileIndex t, Owner o, TunnelID id, DiagDirection d, RoadType road_rt, RoadType tram_rt)
 {
 	SetTileType(t, MP_TUNNELBRIDGE);
 	SetTileOwner(t, o);
-	_m[t].m2 = 0;
+	SetTunnelIndex(t, id);
 	_m[t].m3 = 0;
 	_m[t].m4 = 0;
 	_m[t].m5 = TRANSPORT_ROAD << 2 | d;
@@ -66,14 +139,15 @@ static inline void MakeRoadTunnel(TileIndex t, Owner o, DiagDirection d, RoadTyp
  * Makes a rail tunnel entrance
  * @param t the entrance of the tunnel
  * @param o the owner of the entrance
+ * @param id the tunnel ID
  * @param d the direction facing out of the tunnel
  * @param r the rail type used in the tunnel
  */
-static inline void MakeRailTunnel(TileIndex t, Owner o, DiagDirection d, RailType r)
+static inline void MakeRailTunnel(TileIndex t, Owner o, TunnelID id, DiagDirection d, RailType r)
 {
 	SetTileType(t, MP_TUNNELBRIDGE);
 	SetTileOwner(t, o);
-	_m[t].m2 = 0;
+	SetTunnelIndex(t, id);
 	_m[t].m3 = 0;
 	_m[t].m4 = 0;
 	_m[t].m5 = TRANSPORT_RAIL << 2 | d;

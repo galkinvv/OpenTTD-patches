@@ -38,6 +38,13 @@ const SaveLoad *GetLinkGraphDesc()
 	return link_graph_desc;
 }
 
+void GetLinkGraphJobDayLengthScaleAfterLoad(LinkGraphJob *lgj)
+{
+	lgj->join_date_ticks *= DAY_TICKS;
+	lgj->join_date_ticks += LinkGraphSchedule::SPAWN_JOIN_TICK;
+	lgj->start_date_ticks = lgj->join_date_ticks - (lgj->Settings().recalc_time * DAY_TICKS);
+}
+
 /**
  * Get a SaveLoad array for a link graph job. The settings struct is derived from
  * the global settings saveload array. The exact entries are calculated when the function
@@ -73,7 +80,8 @@ const SaveLoad *GetLinkGraphJobDesc()
 		}
 
 		const SaveLoad job_desc[] = {
-			SLE_VAR(LinkGraphJob, join_date,        SLE_INT32),
+			SLE_VAR(LinkGraphJob, join_date_ticks,  SLE_INT32),
+			SLE_CONDVAR_X(LinkGraphJob, start_date_ticks,  SLE_INT32, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_LINKGRAPH_DAY_SCALE)),
 			SLE_VAR(LinkGraphJob, link_graph.index, SLE_UINT16),
 			SLE_END()
 		};
@@ -128,25 +136,53 @@ static const SaveLoad _edge_desc[] = {
 	     SLE_END()
 };
 
+std::vector<SaveLoad> _filtered_node_desc;
+std::vector<SaveLoad> _filtered_edge_desc;
+std::vector<SaveLoad> _filtered_job_desc;
+
+static void FilterDescs()
+{
+	_filtered_node_desc = SlFilterObject(_node_desc);
+	_filtered_edge_desc = SlFilterObject(_edge_desc);
+	_filtered_job_desc = SlFilterObject(GetLinkGraphJobDesc());
+}
+
 /**
- * Save/load a link graph.
+ * Save a link graph.
  * @param lg Link graph to be saved or loaded.
  */
-void SaveLoad_LinkGraph(LinkGraph &lg)
+void Save_LinkGraph(LinkGraph &lg)
 {
 	uint size = lg.Size();
 	for (NodeID from = 0; from < size; ++from) {
 		Node *node = &lg.nodes[from];
-		SlObject(node, _node_desc);
+		SlObjectSaveFiltered(node, _filtered_node_desc.data());
+		/* ... but as that wasted a lot of space we save a sparse matrix now. */
+		for (NodeID to = from; to != INVALID_NODE; to = lg.edges[from][to].next_edge) {
+			SlObjectSaveFiltered(&lg.edges[from][to], _filtered_edge_desc.data());
+		}
+	}
+}
+
+/**
+ * Load a link graph.
+ * @param lg Link graph to be saved or loaded.
+ */
+void Load_LinkGraph(LinkGraph &lg)
+{
+	uint size = lg.Size();
+	for (NodeID from = 0; from < size; ++from) {
+		Node *node = &lg.nodes[from];
+		SlObjectLoadFiltered(node, _filtered_node_desc.data());
 		if (IsSavegameVersionBefore(SLV_191)) {
 			/* We used to save the full matrix ... */
 			for (NodeID to = 0; to < size; ++to) {
-				SlObject(&lg.edges[from][to], _edge_desc);
+				SlObjectLoadFiltered(&lg.edges[from][to], _filtered_edge_desc.data());
 			}
 		} else {
 			/* ... but as that wasted a lot of space we save a sparse matrix now. */
 			for (NodeID to = from; to != INVALID_NODE; to = lg.edges[from][to].next_edge) {
-				SlObject(&lg.edges[from][to], _edge_desc);
+				SlObjectLoadFiltered(&lg.edges[from][to], _filtered_edge_desc.data());
 			}
 		}
 	}
@@ -158,10 +194,10 @@ void SaveLoad_LinkGraph(LinkGraph &lg)
  */
 static void DoSave_LGRJ(LinkGraphJob *lgj)
 {
-	SlObject(lgj, GetLinkGraphJobDesc());
+	SlObjectSaveFiltered(lgj, _filtered_job_desc.data());
 	_num_nodes = lgj->Size();
-	SlObject(const_cast<LinkGraph *>(&lgj->Graph()), GetLinkGraphDesc());
-	SaveLoad_LinkGraph(const_cast<LinkGraph &>(lgj->Graph()));
+	SlObjectSaveFiltered(const_cast<LinkGraph *>(&lgj->Graph()), GetLinkGraphDesc()); // GetLinkGraphDesc has no conditionals
+	Save_LinkGraph(const_cast<LinkGraph &>(lgj->Graph()));
 }
 
 /**
@@ -171,8 +207,8 @@ static void DoSave_LGRJ(LinkGraphJob *lgj)
 static void DoSave_LGRP(LinkGraph *lg)
 {
 	_num_nodes = lg->Size();
-	SlObject(lg, GetLinkGraphDesc());
-	SaveLoad_LinkGraph(*lg);
+	SlObjectSaveFiltered(lg, GetLinkGraphDesc()); // GetLinkGraphDesc has no conditionals
+	Save_LinkGraph(*lg);
 }
 
 /**
@@ -180,6 +216,7 @@ static void DoSave_LGRP(LinkGraph *lg)
  */
 static void Load_LGRP()
 {
+	FilterDescs();
 	int index;
 	while ((index = SlIterateArray()) != -1) {
 		if (!LinkGraph::CanAllocateItem()) {
@@ -187,9 +224,9 @@ static void Load_LGRP()
 			NOT_REACHED();
 		}
 		LinkGraph *lg = new (index) LinkGraph();
-		SlObject(lg, GetLinkGraphDesc());
+		SlObjectLoadFiltered(lg, GetLinkGraphDesc()); // GetLinkGraphDesc has no conditionals
 		lg->Init(_num_nodes);
-		SaveLoad_LinkGraph(*lg);
+		Load_LinkGraph(*lg);
 	}
 }
 
@@ -198,6 +235,7 @@ static void Load_LGRP()
  */
 static void Load_LGRJ()
 {
+	FilterDescs();
 	int index;
 	while ((index = SlIterateArray()) != -1) {
 		if (!LinkGraphJob::CanAllocateItem()) {
@@ -205,11 +243,14 @@ static void Load_LGRJ()
 			NOT_REACHED();
 		}
 		LinkGraphJob *lgj = new (index) LinkGraphJob();
-		SlObject(lgj, GetLinkGraphJobDesc());
+		SlObjectLoadFiltered(lgj, _filtered_job_desc.data());
+		if (SlXvIsFeatureMissing(XSLFI_LINKGRAPH_DAY_SCALE)) {
+			GetLinkGraphJobDayLengthScaleAfterLoad(lgj);
+		}
 		LinkGraph &lg = const_cast<LinkGraph &>(lgj->Graph());
-		SlObject(&lg, GetLinkGraphDesc());
+		SlObjectLoadFiltered(&lg, GetLinkGraphDesc()); // GetLinkGraphDesc has no conditionals
 		lg.Init(_num_nodes);
-		SaveLoad_LinkGraph(lg);
+		Load_LinkGraph(lg);
 	}
 }
 
@@ -252,6 +293,7 @@ void AfterLoadLinkGraphs()
  */
 static void Save_LGRP()
 {
+	FilterDescs();
 	for (LinkGraph *lg : LinkGraph::Iterate()) {
 		SlSetArrayIndex(lg->index);
 		SlAutolength((AutolengthProc*)DoSave_LGRP, lg);
@@ -263,6 +305,7 @@ static void Save_LGRP()
  */
 static void Save_LGRJ()
 {
+	FilterDescs();
 	for (LinkGraphJob *lgj : LinkGraphJob::Iterate()) {
 		SlSetArrayIndex(lgj->index);
 		SlAutolength((AutolengthProc*)DoSave_LGRJ, lgj);

@@ -53,10 +53,10 @@ void Blitter_32bppSSE2_Anim::PaletteAnimate(const Palette &palette)
 
 			/* test if any colour >= PALETTE_ANIM_START */
 			int colour_cmp_result = _mm_movemask_epi8(_mm_cmpgt_epi16(colour_data, anim_cmp));
-			if (colour_cmp_result) {
+			if (unlikely(colour_cmp_result)) {
 				/* test if any brightness is unexpected */
-				if (x < 8 || colour_cmp_result != 0xFFFF ||
-						_mm_movemask_epi8(_mm_cmpeq_epi16(_mm_srli_epi16(data, 8), brightness_cmp)) != 0xFFFF) {
+				if (unlikely(x < 8 || colour_cmp_result != 0xFFFF ||
+						_mm_movemask_epi8(_mm_cmpeq_epi16(_mm_srli_epi16(data, 8), brightness_cmp)) != 0xFFFF)) {
 					/* slow path: < 8 pixels left or unexpected brightnesses */
 					for (int z = min<int>(x, 8); z != 0 ; z--) {
 						int value = _mm_extract_epi16(data, 0);

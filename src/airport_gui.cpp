@@ -60,7 +60,7 @@ static void PlaceAirport(TileIndex tile)
 
 	uint32 p1 = AirportClass::Get(_selected_airport_class)->GetSpec(_selected_airport_index)->GetIndex();
 	p1 |= _selected_airport_layout << 8;
-	CommandContainer cmdcont = { tile, p1, p2, CMD_BUILD_AIRPORT | CMD_MSG(STR_ERROR_CAN_T_BUILD_AIRPORT_HERE), CcBuildAirport, "" };
+	CommandContainer cmdcont = { tile, p1, p2, CMD_BUILD_AIRPORT | CMD_MSG(STR_ERROR_CAN_T_BUILD_AIRPORT_HERE), CcBuildAirport, 0, "" };
 	ShowSelectStationIfNeeded(cmdcont, TileArea(tile, _thd.size.x / TILE_SIZE, _thd.size.y / TILE_SIZE));
 }
 
@@ -407,7 +407,7 @@ public:
 
 		if (_selected_airport_index != -1) {
 			const AirportSpec *as = AirportClass::Get(_selected_airport_class)->GetSpec(_selected_airport_index);
-			int rad = _settings_game.station.modified_catchment ? as->catchment : (uint)CA_UNMODIFIED;
+			int rad = (_settings_game.station.modified_catchment ? as->catchment : (uint)CA_UNMODIFIED) + _settings_game.station.catchment_increase;
 
 			/* only show the station (airport) noise, if the noise option is activated */
 			if (_settings_game.economy.station_noise_level) {
@@ -458,7 +458,7 @@ public:
 			this->SetWidgetDisabledState(WID_AP_LAYOUT_DECREASE, _selected_airport_layout == 0);
 			this->SetWidgetDisabledState(WID_AP_LAYOUT_INCREASE, _selected_airport_layout + 1 >= as->num_table);
 
-			int rad = _settings_game.station.modified_catchment ? as->catchment : (uint)CA_UNMODIFIED;
+			int rad = (_settings_game.station.modified_catchment ? as->catchment : (uint)CA_UNMODIFIED) + _settings_game.station.catchment_increase;
 			if (_settings_client.gui.station_show_coverage) SetTileSelectBigSize(-rad, -rad, 2 * rad, 2 * rad);
 		}
 	}
@@ -485,6 +485,7 @@ public:
 				this->SetDirty();
 				if (_settings_client.sound.click_beep) SndPlayFx(SND_15_BEEP);
 				this->UpdateSelectSize();
+				SetViewportCatchmentStation(nullptr, true);
 				break;
 
 			case WID_AP_LAYOUT_DECREASE:

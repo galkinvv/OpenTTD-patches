@@ -76,7 +76,7 @@ bool IsPossibleDockingTile(TileIndex t);
  */
 static inline WaterTileType GetWaterTileType(TileIndex t)
 {
-	assert(IsTileType(t, MP_WATER));
+	assert_tile(IsTileType(t, MP_WATER), t);
 
 	switch (GB(_m[t].m5, WBL_TYPE_BEGIN, WBL_TYPE_COUNT)) {
 		case WBL_TYPE_NORMAL: return HasBit(_m[t].m5, WBL_COAST_FLAG) ? WATER_TILE_COAST : WATER_TILE_CLEAR;
@@ -105,7 +105,7 @@ static inline bool HasTileWaterClass(TileIndex t)
  */
 static inline WaterClass GetWaterClass(TileIndex t)
 {
-	assert(HasTileWaterClass(t));
+	assert_tile(HasTileWaterClass(t), t);
 	return (WaterClass)GB(_m[t].m1, 5, 2);
 }
 
@@ -117,7 +117,7 @@ static inline WaterClass GetWaterClass(TileIndex t)
  */
 static inline void SetWaterClass(TileIndex t, WaterClass wc)
 {
-	assert(HasTileWaterClass(t));
+	assert_tile(HasTileWaterClass(t), t);
 	SB(_m[t].m1, 5, 2, wc);
 }
 
@@ -236,7 +236,7 @@ static inline bool IsShipDepotTile(TileIndex t)
  */
 static inline Axis GetShipDepotAxis(TileIndex t)
 {
-	assert(IsShipDepotTile(t));
+	assert_tile(IsShipDepotTile(t), t);
 	return (Axis)GB(_m[t].m5, WBL_DEPOT_AXIS, 1);
 }
 
@@ -248,7 +248,7 @@ static inline Axis GetShipDepotAxis(TileIndex t)
  */
 static inline DepotPart GetShipDepotPart(TileIndex t)
 {
-	assert(IsShipDepotTile(t));
+	assert_tile(IsShipDepotTile(t), t);
 	return (DepotPart)GB(_m[t].m5, WBL_DEPOT_PART, 1);
 }
 
@@ -282,7 +282,7 @@ static inline TileIndex GetOtherShipDepotTile(TileIndex t)
  */
 static inline TileIndex GetShipDepotNorthTile(TileIndex t)
 {
-	assert(IsShipDepot(t));
+	assert_tile(IsShipDepot(t), t);
 	TileIndex tile2 = GetOtherShipDepotTile(t);
 
 	return t < tile2 ? t : tile2;
@@ -307,7 +307,7 @@ static inline bool IsLock(TileIndex t)
  */
 static inline DiagDirection GetLockDirection(TileIndex t)
 {
-	assert(IsLock(t));
+	assert_tile(IsLock(t), t);
 	return (DiagDirection)GB(_m[t].m5, WBL_LOCK_ORIENT_BEGIN, WBL_LOCK_ORIENT_COUNT);
 }
 
@@ -319,7 +319,7 @@ static inline DiagDirection GetLockDirection(TileIndex t)
  */
 static inline byte GetLockPart(TileIndex t)
 {
-	assert(IsLock(t));
+	assert_tile(IsLock(t), t);
 	return GB(_m[t].m5, WBL_LOCK_PART_BEGIN, WBL_LOCK_PART_COUNT);
 }
 
@@ -331,7 +331,7 @@ static inline byte GetLockPart(TileIndex t)
  */
 static inline byte GetWaterTileRandomBits(TileIndex t)
 {
-	assert(IsTileType(t, MP_WATER));
+	assert_tile(IsTileType(t, MP_WATER), t);
 	return _m[t].m4;
 }
 

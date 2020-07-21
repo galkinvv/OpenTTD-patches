@@ -31,6 +31,9 @@
 #include "town.h"
 #include "linkgraph/linkgraph.h"
 #include "zoom_func.h"
+#include "departures_gui.h"
+#include "zoning.h"
+#include "newgrf_debug.h"
 
 #include "widgets/station_widget.h"
 
@@ -123,7 +126,7 @@ static void FindStationsAroundSelection()
  * If it is needed actually make the window for redrawing.
  * @param w the window to check.
  */
-void CheckRedrawStationCoverage(const Window *w)
+void CheckRedrawStationCoverage(Window *w)
 {
 	/* Test if ctrl state changed */
 	static bool _last_ctrl_pressed;
@@ -788,6 +791,7 @@ static const NWidgetPart _nested_station_view_widgets[] = {
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_CLOSEBOX, COLOUR_GREY),
 		NWidget(WWT_CAPTION, COLOUR_GREY, WID_SV_CAPTION), SetDataTip(STR_STATION_VIEW_CAPTION, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
+		NWidget(WWT_DEBUGBOX, COLOUR_GREY),
 		NWidget(WWT_SHADEBOX, COLOUR_GREY),
 		NWidget(WWT_DEFSIZEBOX, COLOUR_GREY),
 		NWidget(WWT_STICKYBOX, COLOUR_GREY),
@@ -813,6 +817,8 @@ static const NWidgetPart _nested_station_view_widgets[] = {
 					SetDataTip(STR_STATION_VIEW_RATINGS_BUTTON, STR_STATION_VIEW_RATINGS_TOOLTIP),
 			NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_SV_RENAME), SetMinimalSize(45, 12), SetResize(1, 0), SetFill(1, 1),
 					SetDataTip(STR_BUTTON_RENAME, STR_STATION_VIEW_RENAME_TOOLTIP),
+            NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_SV_DEPARTURES), SetMinimalSize(80, 12), SetResize(1, 0), SetFill(1, 1),
+                    SetDataTip(STR_STATION_VIEW_DEPARTURES_BUTTON, STR_STATION_VIEW_DEPARTURES_TOOLTIP),
 		EndContainer(),
 		NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_SV_CLOSE_AIRPORT), SetMinimalSize(45, 12), SetResize(1, 0), SetFill(1, 1),
 				SetDataTip(STR_STATION_VIEW_CLOSE_AIRPORT, STR_STATION_VIEW_CLOSE_AIRPORT_TOOLTIP),
@@ -1329,10 +1335,12 @@ struct StationViewWindow : public Window {
 		this->sort_orders[0] = SO_ASCENDING;
 		this->SelectSortOrder((SortOrder)_settings_client.gui.station_gui_sort_order);
 		this->owner = Station::Get(window_number)->owner;
+		ZoningStationWindowOpenClose(Station::Get(window_number));
 	}
 
 	~StationViewWindow()
 	{
+		ZoningStationWindowOpenClose(Station::Get(window_number));
 		DeleteWindowById(WC_TRAINS_LIST,   VehicleListIdentifier(VL_STATION_LIST, VEH_TRAIN,    this->owner, this->window_number).Pack(), false);
 		DeleteWindowById(WC_ROADVEH_LIST,  VehicleListIdentifier(VL_STATION_LIST, VEH_ROAD,     this->owner, this->window_number).Pack(), false);
 		DeleteWindowById(WC_SHIPS_LIST,    VehicleListIdentifier(VL_STATION_LIST, VEH_SHIP,     this->owner, this->window_number).Pack(), false);
@@ -1419,12 +1427,18 @@ struct StationViewWindow : public Window {
 
 		this->vscroll->SetCount(cargo.GetNumChildren()); // update scrollbar
 
+		byte have_veh_types = 0;
+		IterateOrderRefcountMapForDestinationID(st->index, [&](CompanyID cid, OrderType order_type, VehicleType veh_type, uint32 refcount) {
+			SetBit(have_veh_types, veh_type);
+			return true;
+		});
+
 		/* disable some buttons */
 		this->SetWidgetDisabledState(WID_SV_RENAME,   st->owner != _local_company);
-		this->SetWidgetDisabledState(WID_SV_TRAINS,   !(st->facilities & FACIL_TRAIN));
-		this->SetWidgetDisabledState(WID_SV_ROADVEHS, !(st->facilities & FACIL_TRUCK_STOP) && !(st->facilities & FACIL_BUS_STOP));
-		this->SetWidgetDisabledState(WID_SV_SHIPS,    !(st->facilities & FACIL_DOCK));
-		this->SetWidgetDisabledState(WID_SV_PLANES,   !(st->facilities & FACIL_AIRPORT));
+		this->SetWidgetDisabledState(WID_SV_TRAINS,   !(st->facilities & FACIL_TRAIN) && !HasBit(have_veh_types, VEH_TRAIN));
+		this->SetWidgetDisabledState(WID_SV_ROADVEHS, !(st->facilities & FACIL_TRUCK_STOP) && !(st->facilities & FACIL_BUS_STOP) && !HasBit(have_veh_types, VEH_ROAD));
+		this->SetWidgetDisabledState(WID_SV_SHIPS,    !(st->facilities & FACIL_DOCK) && !HasBit(have_veh_types, VEH_SHIP));
+		this->SetWidgetDisabledState(WID_SV_PLANES,   !(st->facilities & FACIL_AIRPORT) && !HasBit(have_veh_types, VEH_AIRCRAFT));
 		this->SetWidgetDisabledState(WID_SV_CLOSE_AIRPORT, !(st->facilities & FACIL_AIRPORT) || st->owner != _local_company || st->owner == OWNER_NONE); // Also consider SE, where _local_company == OWNER_NONE
 		this->SetWidgetLoweredState(WID_SV_CLOSE_AIRPORT, (st->facilities & FACIL_AIRPORT) && (st->airport.flags & AIRPORT_CLOSED_block) != 0);
 
@@ -1491,11 +1505,10 @@ struct StationViewWindow : public Window {
 
 		const FlowStatMap &flows = st->goods[i].flows;
 		for (FlowStatMap::const_iterator it = flows.begin(); it != flows.end(); ++it) {
-			StationID from = it->first;
+			StationID from = it->GetOrigin();
 			CargoDataEntry *source_entry = cargo_entry->InsertOrRetrieve(from);
-			const FlowStat::SharesMap *shares = it->second.GetShares();
 			uint32 prev_count = 0;
-			for (FlowStat::SharesMap::const_iterator flow_it = shares->begin(); flow_it != shares->end(); ++flow_it) {
+			for (FlowStat::const_iterator flow_it = it->begin(); flow_it != it->end(); ++flow_it) {
 				StationID via = flow_it->second;
 				CargoDataEntry *via_entry = source_entry->InsertOrRetrieve(via);
 				if (via == this->window_number) {
@@ -1517,16 +1530,15 @@ struct StationViewWindow : public Window {
 	 * @param count Size of the batch of cargo.
 	 * @param dest CargoDataEntry to save the results in.
 	 */
-	void EstimateDestinations(CargoID cargo, StationID source, StationID next, uint count, CargoDataEntry *dest)
+	void EstimateDestinations(CargoID cargo, StationID source, StationID next, uint count, CargoDataEntry *dest, uint depth = 0)
 	{
-		if (Station::IsValidID(next) && Station::IsValidID(source)) {
+		if (depth <= 128 && Station::IsValidID(next) && Station::IsValidID(source)) {
 			CargoDataEntry tmp;
 			const FlowStatMap &flowmap = Station::Get(next)->goods[cargo].flows;
 			FlowStatMap::const_iterator map_it = flowmap.find(source);
 			if (map_it != flowmap.end()) {
-				const FlowStat::SharesMap *shares = map_it->second.GetShares();
 				uint32 prev_count = 0;
-				for (FlowStat::SharesMap::const_iterator i = shares->begin(); i != shares->end(); ++i) {
+				for (FlowStat::const_iterator i = map_it->begin(); i != map_it->end(); ++i) {
 					tmp.InsertOrRetrieve(i->second)->Update(i->first - prev_count);
 					prev_count = i->first;
 				}
@@ -1552,7 +1564,7 @@ struct StationViewWindow : public Window {
 							if (child->GetStation() == next) {
 								dest->InsertOrRetrieve(next)->Update(estimate);
 							} else {
-								EstimateDestinations(cargo, source, child->GetStation(), estimate, dest);
+								EstimateDestinations(cargo, source, child->GetStation(), estimate, dest, depth + 1);
 							}
 						}
 					}
@@ -1574,10 +1586,10 @@ struct StationViewWindow : public Window {
 	{
 		const CargoDataEntry *source_dest = this->cached_destinations.Retrieve(i);
 		for (FlowStatMap::const_iterator it = flows.begin(); it != flows.end(); ++it) {
-			StationID from = it->first;
+			if (it->IsInvalid()) continue;
+			StationID from = it->GetOrigin();
 			const CargoDataEntry *source_entry = source_dest->Retrieve(from);
-			const FlowStat::SharesMap *shares = it->second.GetShares();
-			for (FlowStat::SharesMap::const_iterator flow_it = shares->begin(); flow_it != shares->end(); ++flow_it) {
+			for (FlowStat::const_iterator flow_it = it->begin(); flow_it != it->end(); ++flow_it) {
 				const CargoDataEntry *via_entry = source_entry->Retrieve(flow_it->second);
 				for (CargoDataSet::iterator dest_it = via_entry->Begin(); dest_it != via_entry->End(); ++dest_it) {
 					CargoDataEntry *dest_entry = *dest_it;
@@ -1648,7 +1660,7 @@ struct StationViewWindow : public Window {
 	 */
 	void SetDisplayedRow(const CargoDataEntry *data)
 	{
-		std::list<StationID> stations;
+		std::vector<StationID> stations;
 		const CargoDataEntry *parent = data->GetParent();
 		if (parent->GetParent() == nullptr) {
 			this->displayed_rows.push_back(RowDisplay(&this->expanded_rows, data->GetCargo()));
@@ -1865,7 +1877,11 @@ struct StationViewWindow : public Window {
 			SetDParam(1, lg != nullptr ? lg->Monthly((*lg)[ge->node].Supply()) : 0);
 			SetDParam(2, STR_CARGO_RATING_APPALLING + (ge->rating >> 5));
 			SetDParam(3, ToPercent8(ge->rating));
-			DrawString(r.left + WD_FRAMERECT_LEFT + 6, r.right - WD_FRAMERECT_RIGHT - 6, y, STR_STATION_VIEW_CARGO_SUPPLY_RATING);
+			int x = DrawString(r.left + WD_FRAMERECT_LEFT + 6, r.right - WD_FRAMERECT_RIGHT - 6, y, STR_STATION_VIEW_CARGO_SUPPLY_RATING);
+			if (!ge->IsSupplyAllowed() && x != 0) {
+				int line_y = y + (FONT_HEIGHT_NORMAL / 2) - 1;
+				GfxDrawLine(r.left + WD_FRAMERECT_LEFT + 6, line_y, x, line_y, PC_WHITE, 1);
+			}
 			y += FONT_HEIGHT_NORMAL;
 		}
 		return CeilDiv(y - r.top - WD_FRAMERECT_TOP, FONT_HEIGHT_NORMAL);
@@ -1979,6 +1995,28 @@ struct StationViewWindow : public Window {
 				this->SelectSortOrder(this->sort_orders[1] == SO_ASCENDING ? SO_DESCENDING : SO_ASCENDING);
 				this->SetTimeout();
 				this->LowerWidget(WID_SV_SORT_ORDER);
+				break;
+			}
+
+			case WID_SV_DEPARTURES: {
+				ShowStationDepartures((StationID)this->window_number);
+				break;
+			}
+
+			case WID_SV_ACCEPT_RATING_LIST: {
+				if (this->owner != _local_company || !_ctrl_pressed || this->GetWidget<NWidgetCore>(WID_SV_ACCEPTS_RATINGS)->widget_data == STR_STATION_VIEW_RATINGS_BUTTON) break;
+				int row = this->GetRowFromWidget(pt.y, WID_SV_ACCEPT_RATING_LIST, WD_FRAMERECT_TOP, FONT_HEIGHT_NORMAL);
+				if (row < 1) break;
+				const Station *st = Station::Get(this->window_number);
+				const CargoSpec *cs;
+				FOR_ALL_SORTED_STANDARD_CARGOSPECS(cs) {
+					const GoodsEntry *ge = &st->goods[cs->Index()];
+					if (!ge->HasRating()) continue;
+					if (row == 1) {
+						DoCommandP(0, this->window_number, cs->Index() | (ge->IsSupplyAllowed() ? 0 : 1 << 8), CMD_SET_STATION_CARGO_ALLOWED_SUPPLY | CMD_MSG(STR_ERROR_CAN_T_DO_THIS));
+					}
+					row--;
+				}
 				break;
 			}
 		}
@@ -2106,6 +2144,16 @@ struct StationViewWindow : public Window {
 				this->ReInit();
 			}
 		}
+	}
+
+	bool IsNewGRFInspectable() const override
+	{
+		return ::IsNewGRFInspectable(GSF_FAKE_STATION_STRUCT, this->window_number);
+	}
+
+	void ShowNewGRFInspectWindow() const override
+	{
+		::ShowNewGRFInspectWindow(GSF_FAKE_STATION_STRUCT, this->window_number);
 	}
 };
 
@@ -2284,7 +2332,7 @@ struct SelectStationWindow : Window {
 
 	~SelectStationWindow()
 	{
-		if (_settings_client.gui.station_show_coverage) SetViewportCatchmentStation(nullptr, true);
+		SetViewportCatchmentStation(nullptr, true);
 
 		_thd.freeze = false;
 	}

@@ -192,7 +192,7 @@ static void PlaceRoadStop(TileIndex start_tile, TileIndex end_tile, uint32 p2, u
 	p2 |= ddir << 3; // Set the DiagDirecion into p2 bits 3 and 4.
 
 	TileArea ta(start_tile, end_tile);
-	CommandContainer cmdcont = { ta.tile, (uint32)(ta.w | ta.h << 8), p2, cmd, CcRoadStop, "" };
+	CommandContainer cmdcont = { ta.tile, (uint32)(ta.w | ta.h << 8), p2, cmd, CcRoadStop, 0, "" };
 	ShowSelectStationIfNeeded(cmdcont, ta);
 }
 
@@ -470,7 +470,7 @@ struct BuildRoadToolbarWindow : Window {
 				break;
 
 			case WID_ROT_BUILD_TUNNEL:
-				HandlePlacePushButton(this, WID_ROT_BUILD_TUNNEL, this->rti->cursor.tunnel, HT_SPECIAL);
+				HandlePlacePushButton(this, WID_ROT_BUILD_TUNNEL, this->rti->cursor.tunnel, HT_SPECIAL | HT_TUNNEL);
 				this->last_started_action = widget;
 				break;
 
@@ -1085,6 +1085,7 @@ struct BuildRoadStationWindow : public PickerWindowBase {
 		this->DrawWidgets();
 
 		int rad = _settings_game.station.modified_catchment ? ((this->window_class == WC_BUS_STATION) ? CA_BUS : CA_TRUCK) : CA_UNMODIFIED;
+		rad += _settings_game.station.catchment_increase;
 		if (_settings_client.gui.station_show_coverage) {
 			SetTileSelectBigSize(-rad, -rad, 2 * rad, 2 * rad);
 		} else {
@@ -1147,6 +1148,7 @@ struct BuildRoadStationWindow : public PickerWindowBase {
 				this->LowerWidget(_settings_client.gui.station_show_coverage + WID_BROS_LT_OFF);
 				if (_settings_client.sound.click_beep) SndPlayFx(SND_15_BEEP);
 				this->SetDirty();
+				SetViewportCatchmentStation(nullptr, true);
 				break;
 
 			default:

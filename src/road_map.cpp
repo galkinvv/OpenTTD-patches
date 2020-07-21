@@ -50,6 +50,7 @@ RoadBits GetAnyRoadBits(TileIndex tile, RoadTramType rtt, bool straight_tunnel_b
 
 		case MP_TUNNELBRIDGE:
 			if (GetTunnelBridgeTransportType(tile) != TRANSPORT_ROAD) return ROAD_NONE;
+			if (IsRoadCustomBridgeHeadTile(tile)) return GetCustomBridgeHeadRoadBits(tile, rtt);
 			return straight_tunnel_bridge_entrance ?
 					AxisToRoadBits(DiagDirToAxis(GetTunnelBridgeDirection(tile))) :
 					DiagDirToRoadBits(ReverseDiagDir(GetTunnelBridgeDirection(tile)));

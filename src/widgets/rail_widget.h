@@ -19,6 +19,7 @@ enum RailToolbarWidgets {
 	WID_RAT_BUILD_EW,       ///< Build rail along the game view X axis.
 	WID_RAT_BUILD_Y,        ///< Build rail along the game grid Y axis.
 	WID_RAT_AUTORAIL,       ///< Autorail tool.
+	WID_RAT_POLYRAIL,       ///< Polyline rail tool.
 	WID_RAT_DEMOLISH,       ///< Destroy something with dynamite!
 	WID_RAT_BUILD_DEPOT,    ///< Build a depot.
 	WID_RAT_BUILD_WAYPOINT, ///< Build a waypoint.
@@ -80,18 +81,25 @@ enum BuildSignalWidgets {
 	WID_BS_SEMAPHORE_ENTRY,    ///< Build a semaphore entry block signal
 	WID_BS_SEMAPHORE_EXIT,     ///< Build a semaphore exit block signal
 	WID_BS_SEMAPHORE_COMBO,    ///< Build a semaphore combo block signal
+	WID_BS_SEMAPHORE_PROG,     ///< Build a semahore programmable pre-signal
 	WID_BS_SEMAPHORE_PBS,      ///< Build a semaphore path signal.
 	WID_BS_SEMAPHORE_PBS_OWAY, ///< Build a semaphore one way path signal.
 	WID_BS_ELECTRIC_NORM,      ///< Build an electric normal block signal
 	WID_BS_ELECTRIC_ENTRY,     ///< Build an electric entry block signal
 	WID_BS_ELECTRIC_EXIT,      ///< Build an electric exit block signal
 	WID_BS_ELECTRIC_COMBO,     ///< Build an electric combo block signal
+	WID_BS_ELECTRIC_PROG,      ///< Build an electric programmable pre-signal
 	WID_BS_ELECTRIC_PBS,       ///< Build an electric path signal.
 	WID_BS_ELECTRIC_PBS_OWAY,  ///< Build an electric one way path signal.
 	WID_BS_CONVERT,            ///< Convert the signal.
+	WID_BS_TRACE_RESTRICT,     ///< Open trace restrict window.
+	WID_BS_PROGRAM,            ///< Enter program to prog signal
 	WID_BS_DRAG_SIGNALS_DENSITY_LABEL,    ///< The current signal density.
 	WID_BS_DRAG_SIGNALS_DENSITY_DECREASE, ///< Decrease the signal density.
 	WID_BS_DRAG_SIGNALS_DENSITY_INCREASE, ///< Increase the signal density.
+	WID_BS_SEMAPHORE_PROG_SEL, ///< NWID_SELECTION for WID_BS_SEMAPHORE_PROG
+	WID_BS_ELECTRIC_PROG_SEL,  ///< NWID_SELECTION for WID_BS_ELECTRIC_PROG
+	WID_BS_PROGRAM_SEL,        ///< NWID_SELECTION for WID_BS_PROGRAM
 };
 
 /** Widgets of the #BuildRailDepotWindow class. */

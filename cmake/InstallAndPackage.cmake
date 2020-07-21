@@ -34,6 +34,7 @@ install(FILES
                 ${CMAKE_SOURCE_DIR}/changelog.txt
                 ${CMAKE_SOURCE_DIR}/docs/multiplayer.md
                 ${CMAKE_SOURCE_DIR}/known-bugs.txt
+                ${CMAKE_SOURCE_DIR}/jgrpp-changelog.md
         DESTINATION ${DOCS_DESTINATION_DIR}
         COMPONENT docs)
 
@@ -87,7 +88,7 @@ set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/COPYING.md")
 set(CPACK_RESOURCE_FILE_README "${CMAKE_SOURCE_DIR}/README.md")
 set(CPACK_MONOLITHIC_INSTALL YES)
 set(CPACK_PACKAGE_EXECUTABLES "openttd;OpenTTD")
-set(CPACK_STRIP_FILES YES)
+set(CPACK_STRIP_FILES NO)
 set(CPACK_OUTPUT_FILE_PREFIX "bundles")
 
 if (APPLE)

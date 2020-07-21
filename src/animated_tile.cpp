@@ -29,7 +29,7 @@ void DeleteAnimatedTile(TileIndex tile)
 	if (to_remove != _animated_tiles.end()) {
 		/* The order of the remaining elements must stay the same, otherwise the animation loop may miss a tile. */
 		_animated_tiles.erase(to_remove);
-		MarkTileDirtyByTile(tile);
+		MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 	}
 }
 
@@ -40,7 +40,7 @@ void DeleteAnimatedTile(TileIndex tile)
  */
 void AddAnimatedTile(TileIndex tile)
 {
-	MarkTileDirtyByTile(tile);
+	MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 	include(_animated_tiles, tile);
 }
 
@@ -49,12 +49,37 @@ void AddAnimatedTile(TileIndex tile)
  */
 void AnimateAnimatedTiles()
 {
+	extern void AnimateTile_Town(TileIndex tile);
+	extern void AnimateTile_Station(TileIndex tile);
+	extern void AnimateTile_Industry(TileIndex tile);
+	extern void AnimateTile_Object(TileIndex tile);
+
 	PerformanceAccumulator framerate(PFE_GL_LANDSCAPE);
 
 	const TileIndex *ti = _animated_tiles.data();
 	while (ti < _animated_tiles.data() + _animated_tiles.size()) {
 		const TileIndex curr = *ti;
-		AnimateTile(curr);
+		switch (GetTileType(curr)) {
+			case MP_HOUSE:
+				AnimateTile_Town(curr);
+				break;
+
+			case MP_STATION:
+				AnimateTile_Station(curr);
+				break;
+
+			case MP_INDUSTRY:
+				AnimateTile_Industry(curr);
+				break;
+
+			case MP_OBJECT:
+				AnimateTile_Object(curr);
+				break;
+
+			default:
+				NOT_REACHED();
+		}
+
 		/* During the AnimateTile call, DeleteAnimatedTile could have been called,
 		 * deleting an element we've already processed and pushing the rest one
 		 * slot to the left. We can detect this by checking whether the index

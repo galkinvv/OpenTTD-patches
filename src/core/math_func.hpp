@@ -143,6 +143,29 @@ static inline T Clamp(const T a, const T min, const T max)
 }
 
 /**
+ * Clamp a value between an interval.
+ *
+ * This function returns a value which is between the given interval of
+ * min and max. If the given value is in this interval the value itself
+ * is returned otherwise the border of the interval is returned, according
+ * which side of the interval was 'left'.
+ *
+ * @note If the min value is greater than the return value is the average of the min and max.
+ * @param a The value to clamp/truncate.
+ * @param min The minimum of the interval.
+ * @param max the maximum of the interval.
+ * @returns A value between min and max which is closest to a.
+ */
+template <typename T>
+static inline T SoftClamp(const T a, const T min, const T max)
+{
+	if (min > max) return (min + max) / 2;
+	if (a <= min) return min;
+	if (a >= max) return max;
+	return a;
+}
+
+/**
  * Clamp an integer between an interval.
  *
  * This function returns a value which is between the given interval of
@@ -317,6 +340,18 @@ static inline uint CeilDiv(uint a, uint b)
 }
 
 /**
+ * Computes ceil(a / b) for non-negative a and b (templated).
+ * @param a Numerator
+ * @param b Denominator
+ * @return Quotient, rounded up
+ */
+template <typename T>
+static inline T CeilDivT(T a, T b)
+{
+	return (a + b - 1) / b;
+}
+
+/**
  * Computes ceil(a / b) * b for non-negative a and b.
  * @param a Numerator
  * @param b Denominator
@@ -325,6 +360,18 @@ static inline uint CeilDiv(uint a, uint b)
 static inline uint Ceil(uint a, uint b)
 {
 	return CeilDiv(a, b) * b;
+}
+
+/**
+ * Computes ceil(a / b) * b for non-negative a and b (templated).
+ * @param a Numerator
+ * @param b Denominator
+ * @return a rounded up to the nearest multiple of b.
+ */
+template <typename T>
+static inline T CeilT(T a, T b)
+{
+	return CeilDivT<T>(a, b) * b;
 }
 
 /**
@@ -359,6 +406,30 @@ static inline int DivAwayFromZero(int a, uint b)
 		/* Note: Behaviour of negative numerator division is truncation toward zero. */
 		return (a - _b + 1) / _b;
 	}
+}
+
+/**
+ * Computes a / b rounded towards negative infinity for b > 0.
+ * @param a Numerator
+ * @param b Denominator
+ * @return Quotient, rounded towards negative infinity
+ */
+template <typename T>
+static inline T DivTowardsNegativeInf(T a, T b)
+{
+	return (a / b) - (a % b < 0 ? 1 : 0);
+}
+
+/**
+ * Computes a / b rounded towards positive infinity for b > 0.
+ * @param a Numerator
+ * @param b Denominator
+ * @return Quotient, rounded towards positive infinity
+ */
+template <typename T>
+static inline T DivTowardsPositiveInf(T a, T b)
+{
+	return (a / b) + (a % b > 0 ? 1 : 0);
 }
 
 uint32 IntSqrt(uint32 num);

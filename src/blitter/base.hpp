@@ -12,6 +12,9 @@
 
 #include "../spritecache.h"
 #include "../spriteloader/spriteloader.hpp"
+#include "../core/math_func.hpp"
+
+#include <utility>
 
 /** The modes of blitting we can do. */
 enum BlitterMode {
@@ -21,6 +24,19 @@ enum BlitterMode {
 	BM_CRASH_REMAP,  ///< Perform a crash remapping.
 	BM_BLACK_REMAP,  ///< Perform remapping to a completely blackened sprite
 };
+
+/** Helper for using specialised functions designed to prevent whenever it's possible things like:
+ *  - IO (reading video buffer),
+ *  - calculations (alpha blending),
+ *  - heavy branching (remap lookups and animation buffer handling).
+ */
+enum BlitterSpriteFlags {
+	SF_NONE        = 0,
+	SF_TRANSLUCENT = 1 << 1, ///< The sprite has at least 1 translucent pixel.
+	SF_NO_REMAP    = 1 << 2, ///< The sprite has no remappable colour pixel.
+	SF_NO_ANIM     = 1 << 3, ///< The sprite has no palette animated pixel.
+};
+DECLARE_ENUM_AS_BIT_SET(BlitterSpriteFlags);
 
 /**
  * How all blitters should look like. Extend this class to make your own.
@@ -99,6 +115,26 @@ public:
 	virtual void SetPixel(void *video, int x, int y, uint8 colour) = 0;
 
 	/**
+	 * Draw a sequence of pixels on the video-buffer.
+	 * @param video The destination pointer (video-buffer).
+	 * @param x The x position within video-buffer.
+	 * @param y The y position within video-buffer.
+	 * @param colours A 8bpp colour mapping buffer.
+	 * @param width The length of the line.
+	 */
+	virtual void SetLine(void *video, int x, int y, uint8 *colours, uint width) = 0;
+
+	/**
+	 * Draw a sequence of pixels on the video-buffer (no LookupColourInPalette).
+	 * @param video The destination pointer (video-buffer).
+	 * @param x The x position within video-buffer.
+	 * @param y The y position within video-buffer.
+	 * @param colours A 32bpp colour buffer.
+	 * @param width The length of the line.
+	 */
+	virtual void SetLine32(void *video, int x, int y, uint32 *colours, uint width) { NOT_REACHED(); };
+
+	/**
 	 * Make a single horizontal line in a single colour on the video-buffer.
 	 * @param video The destination pointer (video-buffer).
 	 * @param width The length of the line.
@@ -162,7 +198,7 @@ public:
 	 * @param scroll_x How much to scroll in X.
 	 * @param scroll_y How much to scroll in Y.
 	 */
-	virtual void ScrollBuffer(void *video, int &left, int &top, int &width, int &height, int scroll_x, int scroll_y) = 0;
+	virtual void ScrollBuffer(void *video, int left, int top, int width, int height, int scroll_x, int scroll_y) = 0;
 
 	/**
 	 * Calculate how much memory there is needed for an image of this size in the video-buffer.

@@ -9,6 +9,7 @@
 
 #include "stdafx.h"
 #include <stdarg.h>
+#include <functional>
 #include "window_gui.h"
 #include "window_func.h"
 #include "fileio_func.h"
@@ -38,6 +39,8 @@
 #include "newgrf_industries.h"
 #include "newgrf_industrytiles.h"
 
+#include "newgrf_config.h"
+
 #include "widgets/newgrf_debug_widget.h"
 
 #include "table/strings.h"
@@ -54,7 +57,7 @@ NewGrfDebugSpritePicker _newgrf_debug_sprite_picker = { SPM_NONE, nullptr, 0, st
  */
 static inline uint GetFeatureIndex(uint window_number)
 {
-	return GB(window_number, 0, 24);
+	return GB(window_number, 0, 27);
 }
 
 /**
@@ -66,8 +69,8 @@ static inline uint GetFeatureIndex(uint window_number)
  */
 static inline uint GetInspectWindowNumber(GrfSpecFeature feature, uint index)
 {
-	assert((index >> 24) == 0);
-	return (feature << 24) | index;
+	assert((index >> 27) == 0);
+	return (feature << 27) | index;
 }
 
 /**
@@ -197,6 +200,9 @@ public:
 		return nullptr;
 	}
 
+	virtual void ExtraInfo(uint index, std::function<void(const char *)> print) const {}
+	virtual bool ShowExtraInfoOnly(uint index) const { return false; };
+
 protected:
 	/**
 	 * Helper to make setting the strings easier.
@@ -244,7 +250,7 @@ struct NIFeature {
  */
 static inline GrfSpecFeature GetFeatureNum(uint window_number)
 {
-	return (GrfSpecFeature)GB(window_number, 24, 8);
+	return (GrfSpecFeature)GB(window_number, 27, 5);
 }
 
 /**
@@ -289,6 +295,8 @@ struct NewGRFInspectWindow : Window {
 	byte current_edit_param;
 
 	Scrollbar *vscroll;
+
+	int first_variable_line_index = 0;
 
 	/**
 	 * Check whether the given variable has a parameter.
@@ -457,6 +465,30 @@ struct NewGRFInspectWindow : Window {
 		const void *base_spec = nih->GetSpec(index);
 
 		uint i = 0;
+
+		nih->ExtraInfo(index, [&](const char *buf) {
+			int offset = i++;
+			offset -= this->vscroll->GetPosition();
+			if (offset < 0 || offset >= this->vscroll->GetCapacity()) return;
+
+			::DrawString(r.left + LEFT_OFFSET, r.right - RIGHT_OFFSET, r.top + TOP_OFFSET + (offset * this->resize.step_height), buf, TC_BLACK);
+		});
+
+		if (nih->ShowExtraInfoOnly(index)) return;
+
+		uint32 grfid = nih->GetGRFID(index);
+		if (grfid) {
+			this->DrawString(r, i++, "GRF:");
+			this->DrawString(r, i++, "  ID: %08X", BSWAP32(grfid));
+			GRFConfig *grfconfig = GetGRFConfig(grfid);
+			if (grfconfig) {
+				this->DrawString(r, i++, "  Name: %s", grfconfig->GetName());
+				this->DrawString(r, i++, "  File: %s", grfconfig->filename);
+			}
+		}
+
+		const_cast<NewGRFInspectWindow*>(this)->first_variable_line_index = i;
+
 		if (nif->variables != nullptr) {
 			this->DrawString(r, i++, "Variables:");
 			for (const NIVariable *niv = nif->variables; niv->name != nullptr; niv++) {
@@ -584,6 +616,8 @@ struct NewGRFInspectWindow : Window {
 				/* Get the line, make sure it's within the boundaries. */
 				int line = this->vscroll->GetScrolledRowFromWidget(pt.y, this, WID_NGRFI_MAINPANEL, TOP_OFFSET);
 				if (line == INT_MAX) return;
+				if (line < this->first_variable_line_index) return;
+				line -= this->first_variable_line_index;
 
 				/* Find the variable related to the line */
 				for (const NIVariable *niv = nif->variables; niv->name != nullptr; niv++, line--) {
@@ -697,6 +731,7 @@ static WindowDesc _newgrf_inspect_desc(
  */
 void ShowNewGRFInspectWindow(GrfSpecFeature feature, uint index, const uint32 grfid)
 {
+	if (index >= (1 << 27)) return;
 	if (!IsNewGRFInspectable(feature, index)) return;
 
 	WindowNumber wno = GetInspectWindowNumber(feature, index);
@@ -716,6 +751,7 @@ void ShowNewGRFInspectWindow(GrfSpecFeature feature, uint index, const uint32 gr
 void InvalidateNewGRFInspectWindow(GrfSpecFeature feature, uint index)
 {
 	if (feature == GSF_INVALID) return;
+	if (index >= (1 << 27)) return;
 
 	WindowNumber wno = GetInspectWindowNumber(feature, index);
 	InvalidateWindowData(WC_NEWGRF_INSPECT, wno);
@@ -732,6 +768,7 @@ void InvalidateNewGRFInspectWindow(GrfSpecFeature feature, uint index)
 void DeleteNewGRFInspectWindow(GrfSpecFeature feature, uint index)
 {
 	if (feature == GSF_INVALID) return;
+	if (index >= (1 << 27)) return;
 
 	WindowNumber wno = GetInspectWindowNumber(feature, index);
 	DeleteWindowById(WC_NEWGRF_INSPECT, wno);
@@ -753,6 +790,7 @@ void DeleteNewGRFInspectWindow(GrfSpecFeature feature, uint index)
  */
 bool IsNewGRFInspectable(GrfSpecFeature feature, uint index)
 {
+	if (index >= (1 << 27)) return false;
 	const NIFeature *nif = GetFeature(GetInspectWindowNumber(feature, index));
 	if (nif == nullptr) return false;
 	return nif->helper->IsInspectable(index);

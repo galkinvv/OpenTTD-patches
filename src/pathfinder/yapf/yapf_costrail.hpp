@@ -11,6 +11,7 @@
 #define YAPF_COSTRAIL_HPP
 
 #include "../../pbs.h"
+#include "../../tracerestrict.h"
 
 template <class Types>
 class CYapfCostRailT : public CYapfCostBase {
@@ -43,7 +44,7 @@ protected:
 			this->tile = tile;
 			this->td = td;
 			this->tile_type = GetTileType(tile);
-			this->rail_type = GetTileRailType(tile);
+			this->rail_type = GetTileRailTypeByTrack(tile, TrackdirToTrack(td));
 		}
 	};
 
@@ -69,8 +70,8 @@ protected:
 		int p1 = Yapf().PfGetSettings().rail_look_ahead_signal_p1;
 		int p2 = Yapf().PfGetSettings().rail_look_ahead_signal_p2;
 		int *pen = m_sig_look_ahead_costs.GrowSizeNC(Yapf().PfGetSettings().rail_look_ahead_max_signals);
-		for (uint i = 0; i < Yapf().PfGetSettings().rail_look_ahead_max_signals; i++) {
-			pen[i] = p0 + i * (p1 + i * p2);
+		for (int i = 0; i < (int) Yapf().PfGetSettings().rail_look_ahead_max_signals; i++) {
+			pen[i] = max<int>(0, p0 + i * (p1 + i * p2));
 		}
 	}
 
@@ -83,7 +84,7 @@ protected:
 public:
 	inline int SlopeCost(TileIndex tile, Trackdir td)
 	{
-		CPerfStart perf_cost(Yapf().m_perf_slope_cost);
+		CPerfStart perf_cost(&Yapf().m_perf_slope_cost);
 		if (!stSlopeCost(tile, td)) return 0;
 		return Yapf().PfGetSettings().rail_slope_penalty;
 	}
@@ -165,11 +166,132 @@ public:
 		return 0;
 	}
 
+private:
+	// returns true if ExecuteTraceRestrict should be called
+	inline bool ShouldCheckTraceRestrict(Node& n, TileIndex tile)
+	{
+		return n.m_num_signals_passed < m_sig_look_ahead_costs.Size() &&
+				IsRestrictedSignal(tile);
+	}
+
+	/**
+	 * This is called to retrieve the previous signal, as required
+	 * This is not run all the time as it is somewhat expensive and most restrictions will not test for the previous signal
+	 */
+	static TileIndex TraceRestrictPreviousSignalCallback(const Train *v, const void *node_ptr)
+	{
+		const Node *node = static_cast<const Node *>(node_ptr);
+		for (;;) {
+			TileIndex last_signal_tile = node->m_last_non_reserve_through_signal_tile;
+			if (last_signal_tile != INVALID_TILE) {
+				Trackdir last_signal_trackdir = node->m_last_non_reserve_through_signal_td;
+				if (HasPbsSignalOnTrackdir(last_signal_tile, last_signal_trackdir)) {
+					return last_signal_tile;
+				} else {
+					return INVALID_TILE;
+				}
+			}
+
+			if (node->m_parent) {
+				node = node->m_parent;
+			} else {
+				// scan forwards from vehicle position, for the case that train is waiting at/approaching PBS signal
+
+				/*
+				 * TODO: can this be made more efficient?
+				 * This track scan will have been performed upstack, however extracting the entry signal
+				 * during that scan and passing it through to this point would likely require relatively
+				 * invasive changes to the pathfinder code, or at least an extra param on a number of wrapper
+				 * functions between there and here, which would be best avoided.
+				 */
+
+				TileIndex origin_tile = node->GetTile();
+				Trackdir origin_trackdir = node->GetTrackdir();
+
+				TileIndex tile = v->tile;
+				Trackdir  trackdir = v->GetVehicleTrackdir();
+
+				TileIndex candidate_tile = INVALID_TILE;
+
+				if (IsRailDepotTile(v->tile)) {
+					candidate_tile = v->tile;
+				} else if (v->track & TRACK_BIT_WORMHOLE && IsTileType(v->tile, MP_TUNNELBRIDGE) && IsTunnelBridgeSignalSimulationExit(v->tile) && IsTunnelBridgePBS(v->tile)) {
+					candidate_tile = v->tile;
+				}
+
+				CFollowTrackRail ft(v);
+
+				for (;;) {
+					if (IsTileType(tile, MP_RAILWAY) && HasSignalOnTrackdir(tile, trackdir)) {
+						if (HasPbsSignalOnTrackdir(tile, trackdir)) {
+							// found PBS signal
+							candidate_tile = tile;
+						} else {
+							// wrong type of signal
+							candidate_tile = INVALID_TILE;
+						}
+					}
+
+					if (tile == origin_tile && trackdir == origin_trackdir) {
+						// reached pathfinder origin
+						return candidate_tile;
+					}
+
+					// advance to next tile
+					if (!ft.Follow(tile, trackdir)) {
+						// ran out of track
+						return INVALID_TILE;
+					}
+
+					if (KillFirstBit(ft.m_new_td_bits) != TRACKDIR_BIT_NONE) {
+						// reached a junction tile
+						return INVALID_TILE;
+					}
+
+					tile = ft.m_new_tile;
+					trackdir = FindFirstTrackdir(ft.m_new_td_bits);
+				}
+			}
+		}
+		NOT_REACHED();
+	}
+
+	// returns true if dead end bit has been set
+	inline bool ExecuteTraceRestrict(Node& n, TileIndex tile, Trackdir trackdir, int& cost, TraceRestrictProgramResult &out, bool *is_res_through)
+	{
+		const TraceRestrictProgram *prog = GetExistingTraceRestrictProgram(tile, TrackdirToTrack(trackdir));
+		TraceRestrictProgramActionsUsedFlags flags_to_check = TRPAUF_PF;
+		if (is_res_through != nullptr) {
+			*is_res_through = false;
+			flags_to_check |= TRPAUF_RESERVE_THROUGH;
+		}
+		if (GetSignalType(tile, TrackdirToTrack(trackdir)) == SIGTYPE_PBS && !HasSignalOnTrackdir(tile, trackdir)) {
+			flags_to_check |= TRPAUF_REVERSE;
+		}
+		if (prog && prog->actions_used_flags & flags_to_check) {
+			prog->Execute(Yapf().GetVehicle(), TraceRestrictProgramInput(tile, trackdir, &TraceRestrictPreviousSignalCallback, &n), out);
+			if (out.flags & TRPRF_RESERVE_THROUGH && is_res_through != nullptr) {
+				*is_res_through = true;
+			}
+			if (out.flags & TRPRF_DENY) {
+				n.m_segment->m_end_segment_reason |= ESRB_DEAD_END;
+				return true;
+			}
+			if (out.flags & TRPRF_REVERSE && flags_to_check & TRPAUF_REVERSE && !n.flags_u.flags_s.m_reverse_pending) {
+				n.flags_u.flags_s.m_reverse_pending = true;
+				n.m_segment->m_end_segment_reason |= ESRB_REVERSE;
+			}
+			cost += out.penalty;
+		}
+		return false;
+	}
+
+public:
 	int SignalCost(Node &n, TileIndex tile, Trackdir trackdir)
 	{
 		int cost = 0;
 		/* if there is one-way signal in the opposite direction, then it is not our way */
-		CPerfStart perf_cost(Yapf().m_perf_other_cost);
+		CPerfStart perf_cost(&Yapf().m_perf_other_cost);
 		if (IsTileType(tile, MP_RAILWAY)) {
 			bool has_signal_against = HasSignalOnTrackdir(tile, ReverseTrackdir(trackdir));
 			bool has_signal_along = HasSignalOnTrackdir(tile, trackdir);
@@ -215,6 +337,7 @@ public:
 						/* special signal penalties */
 						if (n.m_num_signals_passed == 0) {
 							switch (sig_type) {
+								case SIGTYPE_PROG:
 								case SIGTYPE_COMBO:
 								case SIGTYPE_EXIT:   cost += Yapf().PfGetSettings().rail_firstred_exit_penalty; break; // first signal is red pre-signal-exit
 								case SIGTYPE_NORMAL:
@@ -224,6 +347,19 @@ public:
 						}
 					}
 
+					bool is_reserve_through = false;
+					if (ShouldCheckTraceRestrict(n, tile)) {
+						TraceRestrictProgramResult out;
+						if (ExecuteTraceRestrict(n, tile, trackdir, cost, out, &is_reserve_through)) {
+							return -1;
+						}
+						if (is_reserve_through) n.m_num_signals_res_through_passed++;
+					}
+					if (!is_reserve_through) {
+						n.m_last_non_reserve_through_signal_tile = tile;
+						n.m_last_non_reserve_through_signal_td = trackdir;
+					}
+
 					n.m_num_signals_passed++;
 					n.m_segment->m_last_signal_tile = tile;
 					n.m_segment->m_last_signal_td = trackdir;
@@ -231,8 +367,19 @@ public:
 
 				if (has_signal_against && IsPbsSignal(GetSignalType(tile, TrackdirToTrack(trackdir)))) {
 					cost += n.m_num_signals_passed < Yapf().PfGetSettings().rail_look_ahead_max_signals ? Yapf().PfGetSettings().rail_pbs_signal_back_penalty : 0;
+
+					if (ShouldCheckTraceRestrict(n, tile)) {
+						TraceRestrictProgramResult out;
+						if (ExecuteTraceRestrict(n, tile, trackdir, cost, out, nullptr)) {
+							return -1;
+						}
+					}
 				}
 			}
+		}
+		if (IsTileType(tile, MP_TUNNELBRIDGE) && IsTunnelBridgeSignalSimulationExitOnly(tile) && TrackdirEntersTunnelBridge(tile, trackdir)) {
+			/* Entering a signalled bridge/tunnel from the wrong side, equivalent to encountering a one-way signal from the wrong side */
+			n.m_segment->m_end_segment_reason |= ESRB_DEAD_END;
 		}
 		return cost;
 	}
@@ -272,7 +419,7 @@ public:
 		assert(tf->m_new_tile == n.m_key.m_tile);
 		assert((HasTrackdir(tf->m_new_td_bits, n.m_key.m_td)));
 
-		CPerfStart perf_cost(Yapf().m_perf_cost);
+		CPerfStart perf_cost(&Yapf().m_perf_cost);
 
 		/* Does the node have some parent node? */
 		bool has_parent = (n.m_parent != nullptr);
@@ -330,6 +477,17 @@ public:
 			assert(!is_cached_segment);
 			/* Skip the first transition cost calculation. */
 			goto no_entry_cost;
+		} else if (n.flags_u.flags_s.m_teleport) {
+			int x1 = 2 * TileX(prev.tile);
+			int y1 = 2 * TileY(prev.tile);
+			int x2 = 2 * TileX(cur.tile);
+			int y2 = 2 * TileY(cur.tile);
+			int dx = abs(x1 - x2) + 4; // up to 2x track exit dir tile offsets in opposite directions
+			int dy = abs(y1 - y2) + 4; // "
+			int dmin = min(dx, dy);
+			int dxy = abs(dx - dy);
+			segment_entry_cost += dmin * YAPF_TILE_CORNER_LENGTH + (dxy - 1) * (YAPF_TILE_LENGTH / 2);
+			goto no_entry_cost;
 		}
 
 		for (;;) {
@@ -352,7 +510,7 @@ public:
 					end_segment_reason = segment.m_end_segment_reason;
 					/* We will need also some information about the last signal (if it was red). */
 					if (segment.m_last_signal_tile != INVALID_TILE) {
-						assert(HasSignalOnTrackdir(segment.m_last_signal_tile, segment.m_last_signal_td));
+						assert_tile(HasSignalOnTrackdir(segment.m_last_signal_tile, segment.m_last_signal_td), segment.m_last_signal_tile);
 						SignalState sig_state = GetSignalStateByTrackdir(segment.m_last_signal_tile, segment.m_last_signal_td);
 						bool is_red = (sig_state == SIGNAL_STATE_RED);
 						n.flags_u.flags_s.m_last_signal_was_red = is_red;
@@ -391,7 +549,7 @@ no_entry_cost: // jump here at the beginning if the node has no parent (it is th
 			/* Tests for 'potential target' reasons to close the segment. */
 			if (cur.tile == prev.tile) {
 				/* Penalty for reversing in a depot. */
-				assert(IsRailDepot(cur.tile));
+				assert_tile(IsRailDepot(cur.tile), cur.tile);
 				segment_cost += Yapf().PfGetSettings().rail_depot_reverse_penalty;
 
 			} else if (IsRailDepotTile(cur.tile)) {
@@ -575,8 +733,10 @@ no_entry_cost: // jump here at the beginning if the node has no parent (it is th
 
 		/* Do we have an excuse why not to continue pathfinding in this direction? */
 		if (!target_seen && (end_segment_reason & ESRB_ABORT_PF_MASK) != ESRB_NONE) {
-			/* Reason to not continue. Stop this PF branch. */
-			return false;
+			if (likely(!n.flags_u.flags_s.m_reverse_pending || (end_segment_reason & ESRB_ABORT_PF_MASK_PENDING_REVERSE) != ESRB_NONE)) {
+				/* Reason to not continue. Stop this PF branch. */
+				return false;
+			}
 		}
 
 		/* Special costs for the case we have reached our target. */

@@ -25,11 +25,16 @@ enum ScreenshotType {
 	SC_MINIMAP,     ///< Minimap screenshot.
 };
 
+class SmallMapWindow;
+
 void SetupScreenshotViewport(ScreenshotType t, struct ViewPort *vp);
 bool MakeHeightmapScreenshot(const char *filename);
+bool MakeSmallMapScreenshot(unsigned int width, unsigned int height, SmallMapWindow *window);
 void MakeScreenshotWithConfirm(ScreenshotType t);
 bool MakeScreenshot(ScreenshotType t, const char *name);
-bool MakeMinimapWorldScreenshot();
+bool MakeMinimapWorldScreenshot(const char *name);
+void SetScreenshotAuxiliaryText(const char *key, const char *value);
+inline void ClearScreenshotAuxiliaryText() { SetScreenshotAuxiliaryText(nullptr, nullptr); }
 
 extern char _screenshot_format_name[8];
 extern uint _num_screenshot_formats;

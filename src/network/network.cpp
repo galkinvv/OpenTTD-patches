@@ -33,6 +33,7 @@
 #include "../core/pool_func.hpp"
 #include "../gfx_func.h"
 #include "../error.h"
+#include "../core/checksum_func.hpp"
 
 #include "../safeguards.h"
 
@@ -54,6 +55,7 @@ bool _network_server;     ///< network-server is active
 bool _network_available;  ///< is network mode available?
 bool _network_dedicated;  ///< are we a dedicated server?
 bool _is_network_server;  ///< Does this client wants to be a network-server?
+bool _network_settings_access; ///< Can this client change server settings?
 NetworkServerGameInfo _network_game_info; ///< Information about our game.
 NetworkCompanyState *_network_company_states = nullptr; ///< Statistics about some companies.
 ClientID _network_own_client_id;      ///< Our client identifier.
@@ -72,6 +74,7 @@ uint32 _sync_seed_1;                  ///< Seed to compare during sync checks.
 #ifdef NETWORK_SEND_DOUBLE_SEED
 uint32 _sync_seed_2;                  ///< Second part of the seed.
 #endif
+uint64 _sync_state_checksum;          ///< State checksum to compare during sync checks.
 uint32 _sync_frame;                   ///< The frame to perform the sync check.
 bool _network_first_time;             ///< Whether we have finished joining or not.
 bool _network_udp_server;             ///< Is the UDP server started?
@@ -218,8 +221,9 @@ bool NetworkCompanyIsPassworded(CompanyID company_id)
 /* This puts a text-message to the console, or in the future, the chat-box,
  *  (to keep it all a bit more general)
  * If 'self_send' is true, this is the client who is sending the message */
-void NetworkTextMessage(NetworkAction action, TextColour colour, bool self_send, const char *name, const char *str, int64 data)
+void NetworkTextMessage(NetworkAction action, TextColour colour, bool self_send, const char *name, const char *str, NetworkTextMessageData data)
 {
+	char message_src[256];
 	StringID strid;
 	switch (action) {
 		case NETWORK_ACTION_SERVER_MESSAGE:
@@ -245,7 +249,22 @@ void NetworkTextMessage(NetworkAction action, TextColour colour, bool self_send,
 			break;
 		case NETWORK_ACTION_LEAVE:          strid = STR_NETWORK_MESSAGE_CLIENT_LEFT; break;
 		case NETWORK_ACTION_NAME_CHANGE:    strid = STR_NETWORK_MESSAGE_NAME_CHANGE; break;
-		case NETWORK_ACTION_GIVE_MONEY:     strid = self_send ? STR_NETWORK_MESSAGE_GAVE_MONEY_AWAY : STR_NETWORK_MESSAGE_GIVE_MONEY;   break;
+
+		case NETWORK_ACTION_GIVE_MONEY:
+			SetDParamStr(0, name);
+			SetDParam(1, data.auxdata >> 16);
+			GetString(message_src, STR_NETWORK_MESSAGE_MONEY_GIVE_SRC_DESCRIPTION, lastof(message_src));
+			name = message_src;
+			if (self_send) {
+				strid = STR_NETWORK_MESSAGE_GAVE_MONEY_AWAY;
+			} else if ((CompanyID) (data.auxdata & 0xFFFF) == _local_company) {
+				strid = STR_NETWORK_MESSAGE_GIVE_MONEY;
+			} else {
+				strid = STR_NETWORK_MESSAGE_MONEY_GIVEN;
+				SetDParam(3, data.auxdata & 0xFFFF);
+			}
+			break;
+
 		case NETWORK_ACTION_CHAT_COMPANY:   strid = self_send ? STR_NETWORK_CHAT_TO_COMPANY : STR_NETWORK_CHAT_COMPANY; break;
 		case NETWORK_ACTION_CHAT_CLIENT:    strid = self_send ? STR_NETWORK_CHAT_TO_CLIENT  : STR_NETWORK_CHAT_CLIENT;  break;
 		case NETWORK_ACTION_KICKED:         strid = STR_NETWORK_MESSAGE_KICKED; break;
@@ -255,7 +274,7 @@ void NetworkTextMessage(NetworkAction action, TextColour colour, bool self_send,
 	char message[1024];
 	SetDParamStr(0, name);
 	SetDParamStr(1, str);
-	SetDParam(2, data);
+	SetDParam(2, data.data);
 
 	/* All of these strings start with "***". These characters are interpreted as both left-to-right and
 	 * right-to-left characters depending on the context. As the next text might be an user's name, the
@@ -264,7 +283,7 @@ void NetworkTextMessage(NetworkAction action, TextColour colour, bool self_send,
 	char *msg_ptr = message + Utf8Encode(message, _current_text_dir == TD_LTR ? CHAR_TD_LRM : CHAR_TD_RLM);
 	GetString(msg_ptr, strid, lastof(message));
 
-	DEBUG(desync, 1, "msg: %08x; %02x; %s", _date, _date_fract, message);
+	DEBUG(desync, 1, "msg: date{%08x; %02x; %02x}; %s", _date, _date_fract, _tick_skip_counter, message);
 	IConsolePrintF(colour, "%s", message);
 	NetworkAddChatMessage((TextColour)colour, _settings_client.gui.network_chat_timeout, "%s", message);
 }
@@ -342,7 +361,8 @@ void NetworkHandlePauseChange(PauseMode prev_mode, PauseMode changed_mode)
 		case PM_PAUSED_NORMAL:
 		case PM_PAUSED_JOIN:
 		case PM_PAUSED_GAME_SCRIPT:
-		case PM_PAUSED_ACTIVE_CLIENTS: {
+		case PM_PAUSED_ACTIVE_CLIENTS:
+		case PM_PAUSED_LINK_GRAPH: {
 			bool changed = ((_pause_mode == PM_UNPAUSED) != (prev_mode == PM_UNPAUSED));
 			bool paused = (_pause_mode != PM_UNPAUSED);
 			if (!paused && !changed) return;
@@ -355,6 +375,7 @@ void NetworkHandlePauseChange(PauseMode prev_mode, PauseMode changed_mode)
 				if ((_pause_mode & PM_PAUSED_JOIN) != PM_UNPAUSED)           SetDParam(++i, STR_NETWORK_SERVER_MESSAGE_GAME_REASON_CONNECTING_CLIENTS);
 				if ((_pause_mode & PM_PAUSED_GAME_SCRIPT) != PM_UNPAUSED)    SetDParam(++i, STR_NETWORK_SERVER_MESSAGE_GAME_REASON_GAME_SCRIPT);
 				if ((_pause_mode & PM_PAUSED_ACTIVE_CLIENTS) != PM_UNPAUSED) SetDParam(++i, STR_NETWORK_SERVER_MESSAGE_GAME_REASON_NOT_ENOUGH_PLAYERS);
+				if ((_pause_mode & PM_PAUSED_LINK_GRAPH) != PM_UNPAUSED)     SetDParam(++i, STR_NETWORK_SERVER_MESSAGE_GAME_REASON_LINK_GRAPH);
 				str = STR_NETWORK_SERVER_MESSAGE_GAME_STILL_PAUSED_1 + i;
 			} else {
 				switch (changed_mode) {
@@ -362,6 +383,7 @@ void NetworkHandlePauseChange(PauseMode prev_mode, PauseMode changed_mode)
 					case PM_PAUSED_JOIN:           SetDParam(0, STR_NETWORK_SERVER_MESSAGE_GAME_REASON_CONNECTING_CLIENTS); break;
 					case PM_PAUSED_GAME_SCRIPT:    SetDParam(0, STR_NETWORK_SERVER_MESSAGE_GAME_REASON_GAME_SCRIPT); break;
 					case PM_PAUSED_ACTIVE_CLIENTS: SetDParam(0, STR_NETWORK_SERVER_MESSAGE_GAME_REASON_NOT_ENOUGH_PLAYERS); break;
+					case PM_PAUSED_LINK_GRAPH:     SetDParam(0, STR_NETWORK_SERVER_MESSAGE_GAME_REASON_LINK_GRAPH); break;
 					default: NOT_REACHED();
 				}
 				str = paused ? STR_NETWORK_SERVER_MESSAGE_GAME_PAUSED : STR_NETWORK_SERVER_MESSAGE_GAME_UNPAUSED;
@@ -637,7 +659,7 @@ void NetworkRebuildHostList()
 	_network_host_list.clear();
 
 	for (NetworkGameList *item = _network_game_list; item != nullptr; item = item->next) {
-		if (item->manually) _network_host_list.emplace_back(item->address.GetAddressAsString(false));
+		if (item->manually) _network_host_list.emplace_back(NetworkAddressDumper().GetAddressAsString(&(item->address), false));
 	}
 }
 
@@ -853,11 +875,11 @@ void NetworkGameLoop()
 
 	if (_network_server) {
 		/* Log the sync state to check for in-syncedness of replays. */
-		if (_date_fract == 0) {
+		if (_date_fract == 0 && _tick_skip_counter == 0) {
 			/* We don't want to log multiple times if paused. */
 			static Date last_log;
 			if (last_log != _date) {
-				DEBUG(desync, 1, "sync: %08x; %02x; %08x; %08x", _date, _date_fract, _random.state[0], _random.state[1]);
+				DEBUG(desync, 2, "sync: date{%08x; %02x; %02x}; %08x; %08x", _date, _date_fract, _tick_skip_counter, _random.state[0], _random.state[1]);
 				last_log = _date;
 			}
 		}
@@ -867,7 +889,8 @@ void NetworkGameLoop()
 		static FILE *f = FioFOpenFile("commands.log", "rb", SAVE_DIR);
 		static Date next_date = 0;
 		static uint32 next_date_fract;
-		static CommandPacket *cp = nullptr;
+		static uint8 next_tick_skip_counter;
+		static std::unique_ptr<CommandPacket> cp;
 		static bool check_sync_state = false;
 		static uint32 sync_state[2];
 		if (f == nullptr && next_date == 0) {
@@ -878,17 +901,16 @@ void NetworkGameLoop()
 		while (f != nullptr && !feof(f)) {
 			if (_date == next_date && _date_fract == next_date_fract) {
 				if (cp != nullptr) {
-					NetworkSendCommand(cp->tile, cp->p1, cp->p2, cp->cmd & ~CMD_FLAGS_MASK, nullptr, cp->text, cp->company);
-					DEBUG(net, 0, "injecting: %08x; %02x; %02x; %06x; %08x; %08x; %08x; \"%s\" (%s)", _date, _date_fract, (int)_current_company, cp->tile, cp->p1, cp->p2, cp->cmd, cp->text, GetCommandName(cp->cmd));
-					free(cp);
-					cp = nullptr;
+					NetworkSendCommand(cp->tile, cp->p1, cp->p2, cp->cmd & ~CMD_FLAGS_MASK, nullptr, cp->text.c_str(), cp->company, cp->binary_length);
+					DEBUG(net, 0, "injecting: date{%08x; %02x; %02x}; %02x; %06x; %08x; %08x; %08x; \"%s\" (%x) (%s)", _date, _date_fract, _tick_skip_counter, (int)_current_company, cp->tile, cp->p1, cp->p2, cp->cmd, cp->text.c_str(), cp->binary_length, GetCommandName(cp->cmd));
+					cp.reset();
 				}
 				if (check_sync_state) {
 					if (sync_state[0] == _random.state[0] && sync_state[1] == _random.state[1]) {
-						DEBUG(net, 0, "sync check: %08x; %02x; match", _date, _date_fract);
+						DEBUG(net, 0, "sync check: date{%08x; %02x; %02x}; match", _date, _date_fract, _tick_skip_counter);
 					} else {
-						DEBUG(net, 0, "sync check: %08x; %02x; mismatch expected {%08x, %08x}, got {%08x, %08x}",
-									_date, _date_fract, sync_state[0], sync_state[1], _random.state[0], _random.state[1]);
+						DEBUG(net, 0, "sync check: date{%08x; %02x; %02x}; mismatch expected {%08x, %08x}, got {%08x, %08x}",
+									_date, _date_fract, _tick_skip_counter, sync_state[0], sync_state[1], _random.state[0], _random.state[1]);
 						NOT_REACHED();
 					}
 					check_sync_state = false;
@@ -915,32 +937,39 @@ void NetworkGameLoop()
 				) {
 				p += 5;
 				if (*p == ' ') p++;
-				cp = CallocT<CommandPacket>(1);
+				cp.reset(new CommandPacket());
 				int company;
-				assert_compile(sizeof(cp->text) == 128);
-				int ret = sscanf(p, "%x; %x; %x; %x; %x; %x; %x; \"%127[^\"]\"", &next_date, &next_date_fract, &company, &cp->tile, &cp->p1, &cp->p2, &cp->cmd, cp->text);
-				/* There are 8 pieces of data to read, however the last is a
+				cp->text.resize(MAX_CMD_TEXT_LENGTH);
+				assert_compile(MAX_CMD_TEXT_LENGTH > 8192);
+				int ret = sscanf(p, "date{%x; %x; %x}; company: %x; tile: %x (%*u x %*u); p1: %x; p2: %x; cmd: %x; \"%8192[^\"]\"", &next_date, &next_date_fract, &next_tick_skip_counter, &company, &cp->tile, &cp->p1, &cp->p2, &cp->cmd, const_cast<char *>(cp->text.c_str()));
+				/* There are 9 pieces of data to read, however the last is a
 				 * string that might or might not exist. Ignore it if that
 				 * string misses because in 99% of the time it's not used. */
-				assert(ret == 8 || ret == 7);
+				assert(ret == 9 || ret == 8);
 				cp->company = (CompanyID)company;
+				cp->binary_length = 0;
 			} else if (strncmp(p, "join: ", 6) == 0) {
 				/* Manually insert a pause when joining; this way the client can join at the exact right time. */
-				int ret = sscanf(p + 6, "%x; %x", &next_date, &next_date_fract);
-				assert(ret == 2);
-				DEBUG(net, 0, "injecting pause for join at %08x:%02x; please join when paused", next_date, next_date_fract);
-				cp = CallocT<CommandPacket>(1);
+				int ret = sscanf(p + 6, "date{%x; %x; %x}", &next_date, &next_date_fract, &next_tick_skip_counter);
+				assert(ret == 3);
+				DEBUG(net, 0, "injecting pause for join at date{%08x; %02x; %02x}; please join when paused", next_date, next_date_fract, next_tick_skip_counter);
+				cp.reset(new CommandPacket());
+				cp->tile = 0;
 				cp->company = COMPANY_SPECTATOR;
 				cp->cmd = CMD_PAUSE;
 				cp->p1 = PM_PAUSED_NORMAL;
 				cp->p2 = 1;
+				cp->callback = nullptr;
+				cp->binary_length = 0;
 				_ddc_fastforward = false;
 			} else if (strncmp(p, "sync: ", 6) == 0) {
-				int ret = sscanf(p + 6, "%x; %x; %x; %x", &next_date, &next_date_fract, &sync_state[0], &sync_state[1]);
-				assert(ret == 4);
+				int ret = sscanf(p + 6, "date{%x; %x; %x}; %x; %x", &next_date, &next_date_fract, &next_tick_skip_counter, &sync_state[0], &sync_state[1]);
+				assert(ret == 5);
 				check_sync_state = true;
 			} else if (strncmp(p, "msg: ", 5) == 0 || strncmp(p, "client: ", 8) == 0 ||
-						strncmp(p, "load: ", 6) == 0 || strncmp(p, "save: ", 6) == 0) {
+						strncmp(p, "load: ", 6) == 0 || strncmp(p, "save: ", 6) == 0 ||
+						strncmp(p, "new_company: ", 13) == 0 || strncmp(p, "new_company_ai: ", 16) == 0 ||
+						strncmp(p, "buy_company: ", 13) == 0 || strncmp(p, "delete_company: ", 16) == 0) {
 				/* A message that is not very important to the log playback, but part of the log. */
 #ifndef DEBUG_FAILED_DUMP_COMMANDS
 			} else if (strncmp(p, "cmdf: ", 6) == 0) {
@@ -986,6 +1015,7 @@ void NetworkGameLoop()
 #ifdef NETWORK_SEND_DOUBLE_SEED
 		_sync_seed_2 = _random.state[1];
 #endif
+		_sync_state_checksum = _state_checksum.state;
 
 		NetworkServer_Tick(send_frame);
 	} else {
@@ -1083,74 +1113,10 @@ void NetworkShutDown()
 }
 
 /**
- * How many hex digits of the git hash to include in network revision string.
- * Determined as 10 hex digits + 2 characters for -g/-u/-m prefix.
- */
-static const uint GITHASH_SUFFIX_LEN = 12;
-
-/**
- * Get the network version string used by this build.
- * The returned string is guaranteed to be at most NETWORK_REVISON_LENGTH bytes.
- */
-const char * GetNetworkRevisionString()
-{
-	/* This will be allocated on heap and never free'd, but only once so not a "real" leak. */
-	static char *network_revision = nullptr;
-
-	if (!network_revision) {
-		/* Start by taking a chance on the full revision string. */
-		network_revision = stredup(_openttd_revision);
-		/* Ensure it's not longer than the packet buffer length. */
-		if (strlen(network_revision) >= NETWORK_REVISION_LENGTH) network_revision[NETWORK_REVISION_LENGTH - 1] = '\0';
-
-		/* Tag names are not mangled further. */
-		if (_openttd_revision_tagged) {
-			DEBUG(net, 1, "Network revision name is '%s'", network_revision);
-			return network_revision;
-		}
-
-		/* Prepare a prefix of the git hash.
-		* Size is length + 1 for terminator, +2 for -g prefix. */
-		assert(_openttd_revision_modified < 3);
-		char githash_suffix[GITHASH_SUFFIX_LEN + 1] = "-";
-		githash_suffix[1] = "gum"[_openttd_revision_modified];
-		for (uint i = 2; i < GITHASH_SUFFIX_LEN; i++) {
-			githash_suffix[i] = _openttd_revision_hash[i-2];
-		}
-
-		/* Where did the hash start in the original string?
-		 * Overwrite from that position, unless that would go past end of packet buffer length. */
-		ptrdiff_t hashofs = strrchr(_openttd_revision, '-') - _openttd_revision;
-		if (hashofs + strlen(githash_suffix) + 1 > NETWORK_REVISION_LENGTH) hashofs = strlen(network_revision) - strlen(githash_suffix);
-		/* Replace the git hash in revision string. */
-		strecpy(network_revision + hashofs, githash_suffix, network_revision + NETWORK_REVISION_LENGTH);
-		assert(strlen(network_revision) < NETWORK_REVISION_LENGTH); // strlen does not include terminator, constant does, hence strictly less than
-		DEBUG(net, 1, "Network revision name is '%s'", network_revision);
-	}
-
-	return network_revision;
-}
-
-static const char *ExtractNetworkRevisionHash(const char *revstr)
-{
-	return strrchr(revstr, '-');
-}
-
-/**
  * Checks whether the given version string is compatible with our version.
- * First tries to match the full string, if that fails, attempts to compare just git hashes.
  * @param other the version string to compare to
  */
-bool IsNetworkCompatibleVersion(const char *other)
+bool IsNetworkCompatibleVersion(const char *other, bool extended)
 {
-	if (strncmp(GetNetworkRevisionString(), other, NETWORK_REVISION_LENGTH - 1) == 0) return true;
-
-	/* If this version is tagged, then the revision string must be a complete match,
-	 * since there is no git hash suffix in it.
-	 * This is needed to avoid situations like "1.9.0-beta1" comparing equal to "2.0.0-beta1".  */
-	if (_openttd_revision_tagged) return false;
-
-	const char *hash1 = ExtractNetworkRevisionHash(GetNetworkRevisionString());
-	const char *hash2 = ExtractNetworkRevisionHash(other);
-	return hash1 && hash2 && (strncmp(hash1, hash2, GITHASH_SUFFIX_LEN) == 0);
+	return strncmp(_openttd_revision, other, (extended ? NETWORK_LONG_REVISION_LENGTH : NETWORK_REVISION_LENGTH) - 1) == 0;
 }

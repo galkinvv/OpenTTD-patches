@@ -29,6 +29,7 @@ enum TransparencyOption {
 	TO_STRUCTURES, ///< other objects such as transmitters and lighthouses
 	TO_CATENARY,   ///< catenary
 	TO_LOADING,    ///< loading indicators
+	TO_TUNNELS,    ///< vehicles in tunnels
 	TO_END,
 	TO_INVALID,    ///< Invalid transparency option
 };
@@ -69,6 +70,9 @@ static inline bool IsInvisibilitySet(TransparencyOption to)
 static inline void ToggleTransparency(TransparencyOption to)
 {
 	ToggleBit(_transparency_opt, to);
+
+	extern void UpdateAllVehiclesIsDrawn();
+	if (to == TO_TUNNELS) UpdateAllVehiclesIsDrawn();
 }
 
 /**
@@ -112,6 +116,8 @@ static inline void ToggleTransparencyLock(TransparencyOption to)
 /** Set or clear all non-locked transparency options */
 static inline void ResetRestoreAllTransparency()
 {
+	const TransparencyOptionBits old_transparency_opt = _transparency_opt;
+
 	/* if none of the non-locked options are set */
 	if ((_transparency_opt & ~_transparency_lock) == 0) {
 		/* set all non-locked options */
@@ -121,6 +127,10 @@ static inline void ResetRestoreAllTransparency()
 		_transparency_opt &= _transparency_lock;
 	}
 
+	if (HasBit(old_transparency_opt ^ _transparency_opt, TO_TUNNELS)) {
+		extern void UpdateAllVehiclesIsDrawn();
+		UpdateAllVehiclesIsDrawn();
+	}
 	MarkWholeScreenDirty();
 }
 

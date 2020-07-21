@@ -45,8 +45,10 @@
 #include "game/game.hpp"
 #include "goal_base.h"
 #include "story_base.h"
+#include "plans_func.h"
 #include "toolbar_gui.h"
 #include "framerate_type.h"
+#include "zoning.h"
 #include "guitimer_func.h"
 #include "screenshot_gui.h"
 
@@ -173,6 +175,11 @@ public:
 	}
 };
 
+DropDownListItem *MakeCompanyDropDownListItem(CompanyID cid)
+{
+	return new DropDownListCompanyItem(cid, false, false);
+}
+
 /**
  * Pop up a generic text only menu.
  * @param w Toolbar
@@ -267,7 +274,7 @@ static CallBackFunction SelectSignTool()
 
 static CallBackFunction ToolbarPauseClick(Window *w)
 {
-	if (_networking && !_network_server) return CBF_NONE; // only server can pause the game
+	if (_networking && !(_network_server || _network_settings_access)) return CBF_NONE; // only server can pause the game
 
 	if (DoCommandP(0, PM_PAUSED_NORMAL, _pause_mode == PM_UNPAUSED, CMD_PAUSE)) {
 		if (_settings_client.sound.confirm) SndPlayFx(SND_15_BEEP);
@@ -296,6 +303,7 @@ enum OptionMenuEntries {
 	OME_SETTINGS,
 	OME_SCRIPT_SETTINGS,
 	OME_NEWGRFSETTINGS,
+	OME_ZONING,
 	OME_TRANSPARENCIES,
 	OME_SHOW_TOWNNAMES,
 	OME_SHOW_STATIONNAMES,
@@ -324,6 +332,7 @@ static CallBackFunction ToolbarOptionsClick(Window *w)
 	 * to network clients. */
 	if (!_networking || _network_server) list.emplace_back(new DropDownListStringItem(STR_SETTINGS_MENU_SCRIPT_SETTINGS, OME_SCRIPT_SETTINGS, false));
 	list.emplace_back(new DropDownListStringItem(STR_SETTINGS_MENU_NEWGRF_SETTINGS,          OME_NEWGRFSETTINGS, false));
+	list.emplace_back(new DropDownListStringItem(STR_SETTINGS_MENU_ZONING,                   OME_ZONING, false));
 	list.emplace_back(new DropDownListStringItem(STR_SETTINGS_MENU_TRANSPARENCY_OPTIONS,     OME_TRANSPARENCIES, false));
 	list.emplace_back(new DropDownListItem(-1, false));
 	list.emplace_back(new DropDownListCheckedItem(STR_SETTINGS_MENU_TOWN_NAMES_DISPLAYED,    OME_SHOW_TOWNNAMES, false, HasBit(_display_opt, DO_SHOW_TOWN_NAMES)));
@@ -354,6 +363,7 @@ static CallBackFunction MenuClickSettings(int index)
 		case OME_SETTINGS:             ShowGameSettings();                              return CBF_NONE;
 		case OME_SCRIPT_SETTINGS:      ShowAIConfigWindow();                            return CBF_NONE;
 		case OME_NEWGRFSETTINGS:       ShowNewGRFSettings(!_networking && _settings_client.gui.UserIsAllowedToChangeNewGRFs(), true, true, &_grfconfig); return CBF_NONE;
+		case OME_ZONING:               ShowZoningToolbar();                             break;
 		case OME_TRANSPARENCIES:       ShowTransparencyToolbar();                       break;
 
 		case OME_SHOW_TOWNNAMES:       ToggleBit(_display_opt, DO_SHOW_TOWN_NAMES);     break;
@@ -458,6 +468,7 @@ enum MapMenuEntries {
 	MME_SHOW_SIGNLISTS,
 	MME_SHOW_TOWNDIRECTORY,
 	MME_SHOW_INDUSTRYDIRECTORY,
+	MME_SHOW_PLANS,
 };
 
 static CallBackFunction ToolbarMapClick(Window *w)
@@ -467,6 +478,7 @@ static CallBackFunction ToolbarMapClick(Window *w)
 	list.emplace_back(new DropDownListStringItem(STR_MAP_MENU_EXTRA_VIEW_PORT,         MME_SHOW_EXTRAVIEWPORTS,    false));
 	list.emplace_back(new DropDownListStringItem(STR_MAP_MENU_LINGRAPH_LEGEND,         MME_SHOW_LINKGRAPH,         false));
 	list.emplace_back(new DropDownListStringItem(STR_MAP_MENU_SIGN_LIST,               MME_SHOW_SIGNLISTS,         false));
+	list.emplace_back(new DropDownListStringItem(STR_MAP_MENU_PLAN_LIST,               MME_SHOW_PLANS,             false));
 	PopupMainToolbMenu(w, WID_TN_SMALL_MAP, std::move(list), 0);
 	return CBF_NONE;
 }
@@ -498,6 +510,7 @@ static CallBackFunction MenuClickMap(int index)
 		case MME_SHOW_SIGNLISTS:      ShowSignList();            break;
 		case MME_SHOW_TOWNDIRECTORY:  ShowTownDirectory();       break;
 		case MME_SHOW_INDUSTRYDIRECTORY: ShowIndustryDirectory(); break;
+		case MME_SHOW_PLANS:          ShowPlansWindow();         break;
 	}
 	return CBF_NONE;
 }
@@ -615,7 +628,7 @@ static CallBackFunction MenuClickCompany(int index)
 				if (_network_server) {
 					DoCommandP(0, CCA_NEW, _network_own_client_id, CMD_COMPANY_CTRL);
 				} else {
-					NetworkSendCommand(0, CCA_NEW, 0, CMD_COMPANY_CTRL, nullptr, nullptr, _local_company);
+					NetworkSendCommand(0, CCA_NEW, 0, CMD_COMPANY_CTRL, nullptr, nullptr, _local_company, 0);
 				}
 				return CBF_NONE;
 
@@ -1065,7 +1078,7 @@ static CallBackFunction PlaceLandBlockInfo()
 
 static CallBackFunction ToolbarHelpClick(Window *w)
 {
-	PopupMainToolbMenu(w, _game_mode == GM_EDITOR ? (int)WID_TE_HELP : (int)WID_TN_HELP, STR_ABOUT_MENU_LAND_BLOCK_INFO, _settings_client.gui.newgrf_developer_tools ? 10 : 7);
+	PopupMainToolbMenu(w, _game_mode == GM_EDITOR ? (int)WID_TE_HELP : (int)WID_TN_HELP, STR_ABOUT_MENU_LAND_BLOCK_INFO, _settings_client.gui.newgrf_developer_tools ? 11 : 8);
 	return CBF_NONE;
 }
 
@@ -1113,6 +1126,7 @@ void SetStartingYear(Year year)
 	Date new_date = ConvertYMDToDate(_settings_game.game_creation.starting_year, 0, 1);
 	/* If you open a savegame as scenario there may already be link graphs.*/
 	LinkGraphSchedule::instance.ShiftDates(new_date - _date);
+	ShiftOrderDates(new_date - _date);
 	SetDate(new_date, 0);
 }
 
@@ -1129,10 +1143,11 @@ static CallBackFunction MenuClickHelp(int index)
 		case  3: ShowAIDebugWindow();              break;
 		case  4: ShowScreenshotWindow();           break;
 		case  5: ShowFramerateWindow();            break;
-		case  6: ShowAboutWindow();                break;
-		case  7: ShowSpriteAlignerWindow();        break;
-		case  8: ToggleBoundingBoxes();            break;
-		case  9: ToggleDirtyBlocks();              break;
+		case  6: ShowModifierKeyToggleWindow();    break;
+		case  7: ShowAboutWindow();                break;
+		case  8: ShowSpriteAlignerWindow();        break;
+		case  9: ToggleBoundingBoxes();            break;
+		case 10: ToggleDirtyBlocks();              break;
 	}
 	return CBF_NONE;
 }
@@ -1465,6 +1480,21 @@ public:
 			if (nwid != nullptr) return nwid;
 		}
 		return nullptr;
+	}
+
+
+	void FillDirtyWidgets(std::vector<NWidgetBase *> &dirty_widgets) override
+	{
+		if (this->base_flags & WBF_DIRTY) {
+			dirty_widgets.push_back(this);
+		} else {
+			for (NWidgetBase *child_wid = this->head; child_wid != nullptr; child_wid = child_wid->next) {
+				if (child_wid->type == NWID_SPACER) continue;
+				if (!this->visible[((NWidgetCore*)child_wid)->index]) continue;
+
+				child_wid->FillDirtyWidgets(dirty_widgets);
+			}
+		}
 	}
 
 	/**
@@ -1996,6 +2026,8 @@ enum MainToolbarHotkeys {
 	MTHK_EXTRA_VIEWPORT,
 	MTHK_CLIENT_LIST,
 	MTHK_SIGN_LIST,
+	MTHK_PLAN_LIST,
+	MTHK_LINK_GRAPH_LEGEND,
 };
 
 /** Main toolbar. */
@@ -2008,7 +2040,6 @@ struct MainToolbarWindow : Window {
 
 		_last_started_action = CBF_NONE;
 		CLRBITS(this->flags, WF_WHITE_BORDER);
-		this->SetWidgetDisabledState(WID_TN_PAUSE, _networking && !_network_server); // if not server, disable pause button
 		this->SetWidgetDisabledState(WID_TN_FAST_FORWARD, _networking); // if networking, disable fast-forward button
 		PositionMainToolbar(this);
 		DoZoomInOutWindow(ZOOM_NONE, this);
@@ -2037,6 +2068,8 @@ struct MainToolbarWindow : Window {
 		this->SetWidgetDisabledState(WID_TN_ROADS, !CanBuildVehicleInfrastructure(VEH_ROAD, RTT_ROAD));
 		this->SetWidgetDisabledState(WID_TN_TRAMS, !CanBuildVehicleInfrastructure(VEH_ROAD, RTT_TRAM));
 		this->SetWidgetDisabledState(WID_TN_AIR, !CanBuildVehicleInfrastructure(VEH_AIRCRAFT));
+
+		this->SetWidgetDisabledState(WID_TN_PAUSE, _networking && !(_network_server || _network_settings_access)); // if not server, disable pause button
 
 		this->DrawWidgets();
 	}
@@ -2090,12 +2123,14 @@ struct MainToolbarWindow : Window {
 			case MTHK_ZOOMEDIN_SCREENSHOT: MakeScreenshotWithConfirm(SC_ZOOMEDIN); break;
 			case MTHK_DEFAULTZOOM_SCREENSHOT: MakeScreenshotWithConfirm(SC_DEFAULTZOOM); break;
 			case MTHK_GIANT_SCREENSHOT: MakeScreenshotWithConfirm(SC_WORLD); break;
-			case MTHK_CHEATS: if (!_networking) ShowCheatWindow(); break;
+			case MTHK_CHEATS: ShowCheatWindow(); break;
 			case MTHK_TERRAFORM: ShowTerraformToolbar(); break;
 			case MTHK_EXTRA_VIEWPORT: ShowExtraViewPortWindowForTileUnderCursor(); break;
 			case MTHK_CLIENT_LIST: if (_networking) ShowClientList(); break;
 			case MTHK_SIGN_LIST: ShowSignList(); break;
 			case MTHK_LANDINFO: cbf = PlaceLandBlockInfo(); break;
+			case MTHK_PLAN_LIST: ShowPlansWindow(); break;
+			case MTHK_LINK_GRAPH_LEGEND: ShowLinkGraphLegend(); break;
 			default: return ES_NOT_HANDLED;
 		}
 		if (cbf != CBF_NONE) _last_started_action = cbf;
@@ -2210,6 +2245,8 @@ static Hotkey maintoolbar_hotkeys[] = {
 	Hotkey((uint16)0, "client_list", MTHK_CLIENT_LIST),
 	Hotkey((uint16)0, "sign_list", MTHK_SIGN_LIST),
 	Hotkey((uint16)0, "land_info", MTHK_LANDINFO),
+	Hotkey('P', "plan_list", MTHK_PLAN_LIST),
+	Hotkey('Y', "link_graph_legend", MTHK_LINK_GRAPH_LEGEND),
 	HOTKEY_LIST_END
 };
 HotkeyList MainToolbarWindow::hotkeys("maintoolbar", maintoolbar_hotkeys);

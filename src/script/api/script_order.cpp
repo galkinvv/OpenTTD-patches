@@ -503,7 +503,7 @@ static int ScriptOrderPositionToRealOrderPosition(VehicleID vehicle_id, ScriptOr
 			return false;
 	}
 
-	order.SetNonStopType((OrderNonStopFlags)GB(order_flags, 0, 2));
+	order.SetNonStopType((OrderNonStopFlags)(GB(order_flags, 0, 2) | ((_settings_game.order.nonstop_only && ::Vehicle::Get(vehicle_id)->IsGroundVehicle()) ? OF_NON_STOP_INTERMEDIATE : 0)));
 
 	int order_pos = ScriptOrderPositionToRealOrderPosition(vehicle_id, order_position);
 	return ScriptObject::DoCommand(0, vehicle_id | (order_pos << 20), order.Pack(), CMD_INSERT_ORDER);
@@ -572,6 +572,7 @@ static void _DoCommandReturnSetOrderFlags(class ScriptInstance *instance)
 	VehicleID vehicle_id = (VehicleID)ScriptObject::GetCallbackVariable(0);
 	OrderPosition order_position = (OrderPosition)ScriptObject::GetCallbackVariable(1);
 	ScriptOrderFlags order_flags = (ScriptOrderFlags)ScriptObject::GetCallbackVariable(2);
+	if (_settings_game.order.nonstop_only && ::Vehicle::Get(vehicle_id)->IsGroundVehicle()) order_flags |= OF_NON_STOP_INTERMEDIATE;
 
 	order_position = ScriptOrder::ResolveOrderPosition(vehicle_id, order_position);
 
@@ -667,14 +668,14 @@ static void _DoCommandReturnSetOrderFlags(class ScriptInstance *instance)
 /* static */ uint ScriptOrder::GetOrderDistance(ScriptVehicle::VehicleType vehicle_type, TileIndex origin_tile, TileIndex dest_tile)
 {
 	if (vehicle_type == ScriptVehicle::VT_AIR) {
-		if (ScriptTile::IsStationTile(origin_tile)) {
-			Station *orig_station = ::Station::GetByTile(origin_tile);
-			if (orig_station != nullptr && orig_station->airport.tile != INVALID_TILE) origin_tile = orig_station->airport.tile;
-		}
-		if (ScriptTile::IsStationTile(dest_tile)) {
-			Station *dest_station = ::Station::GetByTile(dest_tile);
-			if (dest_station != nullptr && dest_station->airport.tile != INVALID_TILE) dest_tile = dest_station->airport.tile;
-		}
+		auto check_tile = [](TileIndex &tile) {
+			if (ScriptTile::IsStationTile(tile)) {
+				const Station *st = ::Station::GetByTile(tile);
+				if (st != nullptr && st->airport.tile != INVALID_TILE) tile = st->airport.tile;
+			 }
+		};
+		check_tile(origin_tile);
+		check_tile(dest_tile);
 
 		return ScriptMap::DistanceSquare(origin_tile, dest_tile);
 	} else {

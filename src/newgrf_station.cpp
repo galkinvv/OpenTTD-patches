@@ -207,7 +207,7 @@ static uint32 GetRailContinuationInfo(TileIndex tile)
 
 			/* With tunnels and bridges the tile has tracks, but they are not necessarily connected
 			 * with the next tile because the ramp is not going in the right direction. */
-			if (IsTileType(neighbour_tile, MP_TUNNELBRIDGE) && GetTunnelBridgeDirection(neighbour_tile) != *diagdir) {
+			if (IsTileType(neighbour_tile, MP_TUNNELBRIDGE) && GetTunnelBridgeDirection(neighbour_tile) == ReverseDiagDir(*diagdir)) {
 				continue;
 			}
 
@@ -278,7 +278,7 @@ TownScopeResolver *StationResolverObject::GetTown()
 			case 0x46:
 			case 0x47:
 			case 0x49: return 0x2110000;        // Platforms, tracks & position
-			case 0x42: return 0;                // Rail type (XXX Get current type from GUI?)
+			case 0x42: return GetReverseRailTypeTranslation (this->rt, this->statspec->grf_prop.grffile) << 8; // Rail type
 			case 0x43: return GetCompanyInfo(_current_company); // Station owner
 			case 0x44: return 2;                // PBS status
 			case 0x67: // Land info of nearby tile
@@ -425,10 +425,10 @@ uint32 Station::GetNewGRFVariable(const ResolverObject &object, byte variable, b
 
 		switch (variable) {
 			case 0x60: return min(ge->cargo.TotalCount(), 4095);
-			case 0x61: return ge->HasVehicleEverTriedLoading() ? ge->time_since_pickup : 0;
+			case 0x61: return ge->HasVehicleEverTriedLoading() && ge->IsSupplyAllowed() ? ge->time_since_pickup : 0;
 			case 0x62: return ge->HasRating() ? ge->rating : 0xFFFFFFFF;
 			case 0x63: return ge->cargo.DaysInTransit();
-			case 0x64: return ge->HasVehicleEverTriedLoading() ? ge->last_speed | (ge->last_age << 8) : 0xFF00;
+			case 0x64: return ge->HasVehicleEverTriedLoading() && ge->IsSupplyAllowed() ? ge->last_speed | (ge->last_age << 8) : 0xFF00;
 			case 0x65: return GB(ge->status, GoodsEntry::GES_ACCEPTANCE, 1) << 3;
 			case 0x69: {
 				assert_compile((int)GoodsEntry::GES_EVER_ACCEPTED + 1 == (int)GoodsEntry::GES_LAST_MONTH);
@@ -552,14 +552,15 @@ uint32 StationResolverObject::GetDebugID() const
  * @param statspec Station (type) specification.
  * @param st Instance of the station.
  * @param tile %Tile of the station.
+ * @param rt %RailType of the station (unbuilt stations only).
  * @param callback Callback ID.
  * @param callback_param1 First parameter (var 10) of the callback.
  * @param callback_param2 Second parameter (var 18) of the callback.
  */
-StationResolverObject::StationResolverObject(const StationSpec *statspec, BaseStation *st, TileIndex tile,
+StationResolverObject::StationResolverObject(const StationSpec *statspec, BaseStation *st, TileIndex tile, RailType rt,
 		CallbackID callback, uint32 callback_param1, uint32 callback_param2)
 	: ResolverObject(statspec->grf_prop.grffile, callback, callback_param1, callback_param2),
-	station_scope(*this, statspec, st, tile), town_scope(nullptr)
+	station_scope(*this, statspec, st, tile, rt), town_scope(nullptr)
 {
 	/* Invalidate all cached vars */
 	_svc.valid = 0;
@@ -601,12 +602,13 @@ StationResolverObject::~StationResolverObject()
  * @param statspec Station spec
  * @param st Station (nullptr in GUI)
  * @param tile Station tile being drawn (INVALID_TILE in GUI)
+ * @param rt %RailType of the station (unbuilt stations only).
  * @param var10 Value to put in variable 10; normally 0; 1 when resolving the groundsprite and SSF_SEPARATE_GROUND is set.
  * @return First sprite of the Action 1 spriteset to use, minus an offset of 0x42D to accommodate for weird NewGRF specs.
  */
-SpriteID GetCustomStationRelocation(const StationSpec *statspec, BaseStation *st, TileIndex tile, uint32 var10)
+SpriteID GetCustomStationRelocation(const StationSpec *statspec, BaseStation *st, TileIndex tile, RailType rt, uint32 var10)
 {
-	StationResolverObject object(statspec, st, tile, CBID_NO_CALLBACK, var10);
+	StationResolverObject object(statspec, st, tile, rt, CBID_NO_CALLBACK, var10);
 	const SpriteGroup *group = object.Resolve();
 	if (group == nullptr || group->type != SGT_RESULT) return 0;
 	return group->GetResult() - 0x42D;
@@ -624,7 +626,7 @@ SpriteID GetCustomStationRelocation(const StationSpec *statspec, BaseStation *st
 SpriteID GetCustomStationFoundationRelocation(const StationSpec *statspec, BaseStation *st, TileIndex tile, uint layout, uint edge_info)
 {
 	/* callback_param1 == 2 means  we are resolving the foundation sprites. */
-	StationResolverObject object(statspec, st, tile, CBID_NO_CALLBACK, 2, layout | (edge_info << 16));
+	StationResolverObject object(statspec, st, tile, INVALID_RAILTYPE, CBID_NO_CALLBACK, 2, layout | (edge_info << 16));
 
 	const SpriteGroup *group = object.Resolve();
 	if (group == nullptr || group->type != SGT_RESULT) return 0;
@@ -634,9 +636,9 @@ SpriteID GetCustomStationFoundationRelocation(const StationSpec *statspec, BaseS
 }
 
 
-uint16 GetStationCallback(CallbackID callback, uint32 param1, uint32 param2, const StationSpec *statspec, BaseStation *st, TileIndex tile)
+uint16 GetStationCallback(CallbackID callback, uint32 param1, uint32 param2, const StationSpec *statspec, BaseStation *st, TileIndex tile, RailType rt)
 {
-	StationResolverObject object(statspec, st, tile, callback, param1, param2);
+	StationResolverObject object(statspec, st, tile, rt, callback, param1, param2);
 	return object.ResolveCallback();
 }
 
@@ -650,12 +652,12 @@ uint16 GetStationCallback(CallbackID callback, uint32 param1, uint32 param2, con
  * @param numtracks Number of platforms.
  * @return Succeeded or failed command.
  */
-CommandCost PerformStationTileSlopeCheck(TileIndex north_tile, TileIndex cur_tile, const StationSpec *statspec, Axis axis, byte plat_len, byte numtracks)
+CommandCost PerformStationTileSlopeCheck(TileIndex north_tile, TileIndex cur_tile, RailType rt, const StationSpec *statspec, Axis axis, byte plat_len, byte numtracks)
 {
 	TileIndexDiff diff = cur_tile - north_tile;
 	Slope slope = GetTileSlope(cur_tile);
 
-	StationResolverObject object(statspec, nullptr, cur_tile, CBID_STATION_LAND_SLOPE_CHECK,
+	StationResolverObject object(statspec, nullptr, cur_tile, rt, CBID_STATION_LAND_SLOPE_CHECK,
 			(slope << 4) | (slope ^ (axis == AXIS_Y && HasBit(slope, CORNER_W) != HasBit(slope, CORNER_E) ? SLOPE_EW : 0)),
 			(numtracks << 24) | (plat_len << 16) | (axis == AXIS_Y ? TileX(diff) << 8 | TileY(diff) : TileY(diff) << 8 | TileX(diff)));
 	object.station_scope.axis = axis;
@@ -789,7 +791,7 @@ bool DrawStationTile(int x, int y, RailType railtype, Axis axis, StationClassID 
 	if (statspec == nullptr) return false;
 
 	if (HasBit(statspec->callback_mask, CBM_STATION_SPRITE_LAYOUT)) {
-		uint16 callback = GetStationCallback(CBID_STATION_SPRITE_LAYOUT, 0x2110000, 0, statspec, nullptr, INVALID_TILE);
+		uint16 callback = GetStationCallback(CBID_STATION_SPRITE_LAYOUT, 0x2110000, 0, statspec, nullptr, INVALID_TILE, railtype);
 		if (callback != CALLBACK_FAILED) tile = callback;
 	}
 
@@ -815,7 +817,7 @@ bool DrawStationTile(int x, int y, RailType railtype, Axis axis, StationClassID 
 		uint32 var10_values = layout->PrepareLayout(total_offset, rti->fallback_railtype, 0, 0, separate_ground);
 		uint8 var10;
 		FOR_EACH_SET_BIT(var10, var10_values) {
-			uint32 var10_relocation = GetCustomStationRelocation(statspec, nullptr, INVALID_TILE, var10);
+			uint32 var10_relocation = GetCustomStationRelocation(statspec, nullptr, INVALID_TILE, railtype, var10);
 			layout->ProcessRegisters(var10, var10_relocation, separate_ground);
 		}
 
@@ -824,9 +826,9 @@ bool DrawStationTile(int x, int y, RailType railtype, Axis axis, StationClassID 
 		total_offset = 0;
 	} else {
 		/* Simple sprite layout */
-		ground_relocation = relocation = GetCustomStationRelocation(statspec, nullptr, INVALID_TILE, 0);
+		ground_relocation = relocation = GetCustomStationRelocation(statspec, nullptr, INVALID_TILE, railtype, 0);
 		if (HasBit(sprites->ground.sprite, SPRITE_MODIFIER_CUSTOM_SPRITE)) {
-			ground_relocation = GetCustomStationRelocation(statspec, nullptr, INVALID_TILE, 1);
+			ground_relocation = GetCustomStationRelocation(statspec, nullptr, INVALID_TILE, railtype, 1);
 		}
 		ground_relocation += rti->fallback_railtype;
 	}
@@ -902,7 +904,7 @@ bool CanStationTileHaveWires(TileIndex tile)
 /** Wrapper for animation control, see GetStationCallback. */
 uint16 GetAnimStationCallback(CallbackID callback, uint32 param1, uint32 param2, const StationSpec *statspec, BaseStation *st, TileIndex tile, int extra_data)
 {
-	return GetStationCallback(callback, param1, param2, statspec, st, tile);
+	return GetStationCallback(callback, param1, param2, statspec, st, tile, INVALID_RAILTYPE);
 }
 
 /** Helper class for animation control. */
@@ -1008,7 +1010,7 @@ void TriggerStationRandomisation(Station *st, TileIndex tile, StationRandomTrigg
 			}
 
 			if (cargo_type == CT_INVALID || HasBit(ss->cargo_triggers, cargo_type)) {
-				StationResolverObject object(ss, st, tile, CBID_RANDOM_TRIGGER, 0);
+				StationResolverObject object(ss, st, tile, INVALID_RAILTYPE, CBID_RANDOM_TRIGGER, 0);
 				object.waiting_triggers = st->waiting_triggers;
 
 				const SpriteGroup *group = object.Resolve();
@@ -1027,7 +1029,7 @@ void TriggerStationRandomisation(Station *st, TileIndex tile, StationRandomTrigg
 					random_bits |= Random() & reseed;
 					SetStationTileRandomBits(tile, random_bits);
 
-					MarkTileDirtyByTile(tile);
+					MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 				}
 			}
 		}

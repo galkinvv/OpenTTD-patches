@@ -19,6 +19,8 @@
 #include "company_func.h"
 #include "core/pool_func.hpp"
 #include "order_backup.h"
+#include "tbtr_template_vehicle.h"
+#include "tracerestrict.h"
 
 #include "table/strings.h"
 
@@ -132,6 +134,9 @@ void GroupStatistics::Clear()
  */
 /* static */ void GroupStatistics::CountVehicle(const Vehicle *v, int delta)
 {
+	/* make virtual trains group-neutral */
+	if (HasBit(v->subtype, GVSF_VIRTUAL)) return;
+
 	assert(delta == 1 || delta == -1);
 
 	GroupStatistics &stats_all = GroupStatistics::GetAllGroup(v);
@@ -155,6 +160,9 @@ void GroupStatistics::Clear()
  */
 /* static */ void GroupStatistics::CountEngine(const Vehicle *v, int delta)
 {
+	/* make virtual trains group-neutral */
+	if (HasBit(v->subtype, GVSF_VIRTUAL)) return;
+
 	assert(delta == 1 || delta == -1);
 	GroupStatistics::GetAllGroup(v).num_engines[v->engine_type] += delta;
 	GroupStatistics::Get(v).num_engines[v->engine_type] += delta;
@@ -193,7 +201,7 @@ void GroupStatistics::Clear()
 	}
 
 	for (const Vehicle *v : Vehicle::Iterate()) {
-		if (v->IsPrimaryVehicle() && v->age > VEHICLE_PROFIT_MIN_AGE) GroupStatistics::VehicleReachedProfitAge(v);
+		if (v->IsPrimaryVehicle() && v->age > VEHICLE_PROFIT_MIN_AGE && !HasBit(v->subtype, GVSF_VIRTUAL)) GroupStatistics::VehicleReachedProfitAge(v);
 	}
 }
 
@@ -380,6 +388,12 @@ CommandCost CmdDeleteGroup(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 
 		VehicleType vt = g->vehicle_type;
 
+		/* Delete all template replacements using the just deleted group */
+		DeleteTemplateReplacementsByGroupID(g->index);
+
+		/* notify tracerestrict that group is about to be deleted */
+		TraceRestrictRemoveGroupID(g->index);
+
 		/* Delete the Replace Vehicle Windows */
 		DeleteWindowById(WC_REPLACE_VEHICLE, g->vehicle_type);
 		delete g;
@@ -456,6 +470,51 @@ CommandCost CmdAlterGroup(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32
 		InvalidateWindowData(WC_REPLACE_VEHICLE, g->vehicle_type, 1);
 		InvalidateWindowData(GetWindowClassForVehicleType(g->vehicle_type), VehicleListIdentifier(VL_GROUP_LIST, g->vehicle_type, _current_company).Pack());
 		InvalidateWindowData(WC_COMPANY_COLOUR, g->owner, g->vehicle_type);
+	}
+
+	return CommandCost();
+}
+
+/**
+ * Create a new vehicle group.
+ * @param tile unused
+ * @param flags type of operation
+ * @param p1 packed VehicleListIdentifier
+ * @param p2   unused
+ * @param text the new name or an empty string when setting to the default
+ * @return the cost of this operation or an error
+ */
+CommandCost CmdCreateGroupFromList(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
+{
+	VehicleListIdentifier vli;
+	VehicleList list;
+	if (!vli.UnpackIfValid(p1)) return CMD_ERROR;
+	if (!IsCompanyBuildableVehicleType(vli.vtype)) return CMD_ERROR;
+	if (!GenerateVehicleSortList(&list, vli)) return CMD_ERROR;
+
+	CommandCost ret = DoCommand(tile, vli.vtype, INVALID_GROUP, flags, CMD_CREATE_GROUP);
+	if (ret.Failed()) return ret;
+
+	if (!StrEmpty(text)) {
+		if (Utf8StringLength(text) >= MAX_LENGTH_GROUP_NAME_CHARS) return CMD_ERROR;
+	}
+
+	if (flags & DC_EXEC) {
+		Group *g = Group::GetIfValid(_new_group_id);
+		if (g == nullptr || g->owner != _current_company) return CMD_ERROR;
+
+		if (!StrEmpty(text)) {
+			DoCommand(tile, g->index, 0, flags, CMD_ALTER_GROUP, text);
+		}
+
+		for (uint i = 0; i < list.size(); i++) {
+			const Vehicle *v = list[i];
+
+			/* Just try and don't care if some vehicle's can't be added. */
+			DoCommand(tile, g->index, v->index, flags, CMD_ADD_VEHICLE_GROUP);
+		}
+
+		MarkWholeScreenDirty();
 	}
 
 	return CommandCost();
@@ -841,7 +900,10 @@ Money GetGroupProfitLastYear(CompanyID company, GroupID id_g, VehicleType type)
 void RemoveAllGroupsForCompany(const CompanyID company)
 {
 	for (Group *g : Group::Iterate()) {
-		if (company == g->owner) delete g;
+		if (company == g->owner) {
+			DeleteTemplateReplacementsByGroupID(g->index);
+			delete g;
+		}
 	}
 }
 

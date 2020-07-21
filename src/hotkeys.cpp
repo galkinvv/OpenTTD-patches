@@ -78,6 +78,8 @@ static const KeycodeNames _keycode_to_name[] = {
 	{"COMMA", WKC_COMMA}, // legacy variant, should be below ","
 	{".", WKC_PERIOD},
 	{"-", WKC_MINUS},
+	{"PAGE_UP", WKC_PAGEUP},
+	{"PAGE_DOWN", WKC_PAGEDOWN},
 };
 
 /**

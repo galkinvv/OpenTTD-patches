@@ -44,7 +44,7 @@ static void OpenBankFile(const char *filename)
 		/* Corrupt sample data? Just leave the allocated memory as those tell
 		 * there is no sound to play (size = 0 due to calloc). Not allocating
 		 * the memory disables valid NewGRFs that replace sounds. */
-		DEBUG(misc, 6, "Incorrect number of sounds in '%s', ignoring.", filename);
+		DEBUG(sound, 6, "Incorrect number of sounds in '%s', ignoring.", filename);
 		return;
 	}
 
@@ -113,6 +113,19 @@ static bool SetBankSource(MixerChannel *mc, const SoundEntry *sound)
 	/* Check for valid sound size. */
 	if (sound->file_size == 0 || sound->file_size > ((size_t)-1) - 2) return false;
 
+	if (!(sound->bits_per_sample == 8 || sound->bits_per_sample == 16)) {
+		DEBUG(sound, 0, "SetBankSource: Incorrect bits_per_sample: %u", sound->bits_per_sample);
+		return false;
+	}
+	if (sound->channels != 1) {
+		DEBUG(sound, 0, "SetBankSource: Incorrect number of channels: %u", sound->channels);
+		return false;
+	}
+	if (sound->rate == 0) {
+		DEBUG(sound, 0, "SetBankSource: Incorrect rate: %u", sound->rate);
+		return false;
+	}
+
 	int8 *mem = MallocT<int8>(sound->file_size + 2);
 	/* Add two extra bytes so rate conversion can read these
 	 * without reading out of its input buffer. */
@@ -150,7 +163,7 @@ static bool SetBankSource(MixerChannel *mc, const SoundEntry *sound)
 
 void InitializeSound()
 {
-	DEBUG(misc, 1, "Loading sound effects...");
+	DEBUG(sound, 1, "Loading sound effects...");
 	OpenBankFile(BaseSounds::GetUsedSet()->files->filename);
 }
 
@@ -187,7 +200,7 @@ static void StartSound(SoundID sound_id, float pan, uint volume)
 }
 
 
-static const byte _vol_factor_by_zoom[] = {255, 255, 255, 190, 134, 87};
+static const byte _vol_factor_by_zoom[] = {255, 255, 255, 190, 134, 87, 10, 1, 1, 1};
 assert_compile(lengthof(_vol_factor_by_zoom) == ZOOM_LVL_COUNT);
 
 static const byte _sound_base_vol[] = {

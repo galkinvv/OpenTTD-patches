@@ -47,6 +47,7 @@ enum StringControlCode {
 	SCC_COMPANY_NAME,
 	SCC_PRESIDENT_NAME,
 	SCC_ENGINE_NAME,
+	SCC_TR_SLOT_NAME,
 
 	SCC_CURRENCY_SHORT,
 	SCC_CURRENCY_LONG,
@@ -64,10 +65,17 @@ enum StringControlCode {
 	SCC_VELOCITY,
 	SCC_HEIGHT,
 
+	SCC_POWER_WEIGHT_RATIO,
+	SCC_FORCE_WEIGHT_RATIO,
+
 	SCC_DATE_TINY,
 	SCC_DATE_SHORT,
 	SCC_DATE_LONG,
 	SCC_DATE_ISO,
+	SCC_DATE_WALLCLOCK_TINY,
+	SCC_DATE_WALLCLOCK_SHORT,
+	SCC_DATE_WALLCLOCK_LONG,
+	SCC_DATE_WALLCLOCK_ISO,
 
 	/* Must be consecutive */
 	SCC_STRING1,
@@ -82,6 +90,7 @@ enum StringControlCode {
 	SCC_STRING,
 	SCC_COMMA,
 	SCC_DECIMAL,
+	SCC_DECIMAL1,
 	SCC_NUM,
 	SCC_ZEROFILL_NUM,
 	SCC_HEX,
@@ -115,6 +124,8 @@ enum StringControlCode {
 	SCC_BLACK,
 	SCC_PUSH_COLOUR,
 	SCC_POP_COLOUR,
+
+	SCC_CONSUME_ARG,
 
 	/**
 	 * The next variables are part of a NewGRF subsystem for creating text strings.

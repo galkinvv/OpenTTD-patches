@@ -12,6 +12,7 @@
 #include "landscape.h"
 #include "newgrf_house.h"
 #include "newgrf_spritegroup.h"
+#include "newgrf_text.h"
 #include "newgrf_town.h"
 #include "newgrf_sound.h"
 #include "company_func.h"
@@ -23,6 +24,8 @@
 #include "station_base.h"
 
 #include "safeguards.h"
+
+#include "table/strings.h"
 
 static BuildingCounts<uint32> _building_counts;
 static HouseClassMapping _class_mapping[HOUSE_CLASS_MAX];
@@ -68,6 +71,35 @@ GrfSpecFeature HouseResolverObject::GetFeature() const
 }
 
 uint32 HouseResolverObject::GetDebugID() const
+{
+	return HouseSpec::Get(this->house_scope.house_id)->grf_prop.local_id;
+}
+
+/**
+ * Construct a resolver for a fake house.
+ * @param house_id House to query.
+ * @param callback Callback ID.
+ * @param param1 First parameter (var 10) of the callback.
+ * @param param2 Second parameter (var 18) of the callback.
+ * @param not_yet_constructed House is still under construction.
+ * @param initial_random_bits Random bits during construction checks.
+ * @param watched_cargo_triggers Cargo types that triggered the watched cargo callback.
+ */
+FakeHouseResolverObject::FakeHouseResolverObject(HouseID house_id,
+		CallbackID callback, uint32 param1, uint32 param2)
+	: ResolverObject(GetHouseSpecGrf(house_id), callback, param1, param2),
+	house_scope(*this, house_id),
+	town_scope(*this) // Don't access StorePSA if house is not yet constructed.
+{
+	this->root_spritegroup = HouseSpec::Get(house_id)->grf_prop.spritegroup[0];
+}
+
+GrfSpecFeature FakeHouseResolverObject::GetFeature() const
+{
+	return GSF_HOUSES;
+}
+
+uint32 FakeHouseResolverObject::GetDebugID() const
 {
 	return HouseSpec::Get(this->house_scope.house_id)->grf_prop.local_id;
 }
@@ -139,14 +171,14 @@ void DecreaseBuildingCount(Town *t, HouseID house_id)
 /* virtual */ uint32 HouseScopeResolver::GetRandomBits() const
 {
 	/* Note: Towns build houses over houses. So during construction checks 'tile' may be a valid but unrelated house. */
-	assert(IsValidTile(this->tile) && (this->not_yet_constructed || IsTileType(this->tile, MP_HOUSE)));
+	assert_tile(IsValidTile(this->tile) && (this->not_yet_constructed || IsTileType(this->tile, MP_HOUSE)), this->tile);
 	return this->not_yet_constructed ? this->initial_random_bits : GetHouseRandomBits(this->tile);
 }
 
 /* virtual */ uint32 HouseScopeResolver::GetTriggers() const
 {
 	/* Note: Towns build houses over houses. So during construction checks 'tile' may be a valid but unrelated house. */
-	assert(IsValidTile(this->tile) && (this->not_yet_constructed || IsTileType(this->tile, MP_HOUSE)));
+	assert_tile(IsValidTile(this->tile) && (this->not_yet_constructed || IsTileType(this->tile, MP_HOUSE)), this->tile);
 	return this->not_yet_constructed ? 0 : GetHouseTriggers(this->tile);
 }
 
@@ -410,29 +442,125 @@ static uint32 GetDistanceFromNearbyHouse(uint8 parameter, TileIndex tile, HouseI
 	return UINT_MAX;
 }
 
+
+/**
+ * @note Used by the resolver to get values for feature 07 deterministic spritegroups.
+ */
+/* virtual */ uint32 FakeHouseScopeResolver::GetVariable(byte variable, uint32 parameter, bool *available) const
+{
+	switch (variable) {
+		/* Construction stage. */
+		case 0x40: return TOWN_HOUSE_COMPLETED;
+
+		/* Building age. */
+		case 0x41: return 0;
+
+		/* Town zone */
+		case 0x42: return FIND_FIRST_BIT(HouseSpec::Get(this->house_id)->building_availability & HZ_ZONALL); // first available
+
+		/* Terrain type */
+		case 0x43: return _settings_game.game_creation.landscape == LT_ARCTIC && (HouseSpec::Get(house_id)->building_availability & (HZ_SUBARTC_ABOVE | HZ_SUBARTC_BELOW)) == HZ_SUBARTC_ABOVE ? 4 : 0;
+
+		/* Number of this type of building on the map. */
+		case 0x44: return 0;
+
+		/* Whether the town is being created or just expanded. */
+		case 0x45: return 0;
+
+		/* Current animation frame. */
+		case 0x46: return 0;
+
+		/* Position of the house */
+		case 0x47: return 0xFFFFFFFF;
+
+		/* Building counts for old houses with id = parameter. */
+		case 0x60: return 0;
+
+		/* Building counts for new houses with id = parameter. */
+		case 0x61: return 0;
+
+		/* Land info for nearby tiles. */
+		case 0x62: return 0;
+
+		/* Current animation frame of nearby house tiles */
+		case 0x63: return 0;
+
+		/* Cargo acceptance history of nearby stations */
+		case 0x64: return 0;
+
+		/* Distance test for some house types */
+		case 0x65: return 0;
+
+		/* Class and ID of nearby house tile */
+		case 0x66: return 0xFFFFFFFF;
+
+		/* GRFID of nearby house tile */
+		case 0x67: return 0xFFFFFFFF;
+	}
+
+	DEBUG(grf, 1, "Unhandled house variable 0x%X", variable);
+
+	*available = false;
+	return UINT_MAX;
+}
+
 uint16 GetHouseCallback(CallbackID callback, uint32 param1, uint32 param2, HouseID house_id, Town *town, TileIndex tile,
 		bool not_yet_constructed, uint8 initial_random_bits, CargoTypes watched_cargo_triggers)
 {
-	assert(IsValidTile(tile) && (not_yet_constructed || IsTileType(tile, MP_HOUSE)));
+	if (tile != INVALID_TILE) {
+		HouseResolverObject object(house_id, tile, town, callback, param1, param2,
+				not_yet_constructed, initial_random_bits, watched_cargo_triggers);
+		return object.ResolveCallback();
+	} else {
+		FakeHouseResolverObject object(house_id, callback, param1, param2);
+		return object.ResolveCallback();
+	}
+}
 
-	HouseResolverObject object(house_id, tile, town, callback, param1, param2,
-			not_yet_constructed, initial_random_bits, watched_cargo_triggers);
-	return object.ResolveCallback();
+/**
+ * Get the name of a house.
+ * @param house House type.
+ * @param tile Tile where the house is located. INVALID_TILE to get the general name of houses of the given type.
+ * @return Name of the house.
+ */
+StringID GetHouseName(HouseID house_id, TileIndex tile)
+{
+	const HouseSpec *hs = HouseSpec::Get(house_id);
+	bool house_completed = (tile == INVALID_TILE) || IsHouseCompleted(tile);
+	Town *t = (tile == INVALID_TILE) ? nullptr : Town::GetByTile(tile);
+
+	uint16 callback_res = GetHouseCallback(CBID_HOUSE_CUSTOM_NAME, house_completed ? 1 : 0, 0, house_id, t, tile);
+	if (callback_res != CALLBACK_FAILED && callback_res != 0x400) {
+		if (callback_res > 0x400) {
+			ErrorUnknownCallbackResult(hs->grf_prop.grffile->grfid, CBID_HOUSE_CUSTOM_NAME, callback_res);
+		} else {
+			StringID ret = GetGRFStringID(hs->grf_prop.grffile->grfid, 0xD000 + callback_res);
+			if (ret != STR_NULL && ret != STR_UNDEFINED) return ret;
+		}
+	}
+
+	return hs->building_name;
+}
+
+static inline PaletteID GetHouseColour(HouseID house_id, TileIndex tile = INVALID_TILE)
+{
+	const HouseSpec *hs = HouseSpec::Get(house_id);
+	if (HasBit(hs->callback_mask, CBM_HOUSE_COLOUR)) {
+		Town *t = (tile != INVALID_TILE) ? Town::GetByTile(tile) : nullptr;
+		uint16 callback = GetHouseCallback(CBID_HOUSE_COLOUR, 0, 0, house_id, t, tile);
+		if (callback != CALLBACK_FAILED) {
+			/* If bit 14 is set, we should use a 2cc colour map, else use the callback value. */
+			return HasBit(callback, 14) ? GB(callback, 0, 8) + SPR_2CCMAP_BASE : callback;
+		}
+	}
+	return hs->random_colour[TileHash2Bit(TileX(tile), TileY(tile))] + PALETTE_RECOLOUR_START;
 }
 
 static void DrawTileLayout(const TileInfo *ti, const TileLayoutSpriteGroup *group, byte stage, HouseID house_id)
 {
 	const DrawTileSprites *dts = group->ProcessRegisters(&stage);
 
-	const HouseSpec *hs = HouseSpec::Get(house_id);
-	PaletteID palette = hs->random_colour[TileHash2Bit(ti->x, ti->y)] + PALETTE_RECOLOUR_START;
-	if (HasBit(hs->callback_mask, CBM_HOUSE_COLOUR)) {
-		uint16 callback = GetHouseCallback(CBID_HOUSE_COLOUR, 0, 0, house_id, Town::GetByTile(ti->tile), ti->tile);
-		if (callback != CALLBACK_FAILED) {
-			/* If bit 14 is set, we should use a 2cc colour map, else use the callback value. */
-			palette = HasBit(callback, 14) ? GB(callback, 0, 8) + SPR_2CCMAP_BASE : callback;
-		}
-	}
+	PaletteID palette = GetHouseColour(house_id, ti->tile);
 
 	SpriteID image = dts->ground.sprite;
 	PaletteID pal  = dts->ground.pal;
@@ -445,6 +573,26 @@ static void DrawTileLayout(const TileInfo *ti, const TileLayoutSpriteGroup *grou
 	}
 
 	DrawNewGRFTileSeq(ti, dts, TO_HOUSES, stage, palette);
+}
+
+static void DrawTileLayoutInGUI(int x, int y, const TileLayoutSpriteGroup *group, HouseID house_id, bool ground)
+{
+	byte stage = TOWN_HOUSE_COMPLETED;
+	const DrawTileSprites *dts = group->ProcessRegisters(&stage);
+
+	PaletteID palette = GetHouseColour(house_id);
+
+	if (ground) {
+		PalSpriteID image = dts->ground;
+		if (HasBit(image.sprite, SPRITE_MODIFIER_CUSTOM_SPRITE)) image.sprite += stage;
+		if (HasBit(image.pal, SPRITE_MODIFIER_CUSTOM_SPRITE)) image.pal += stage;
+
+		if (GB(image.sprite, 0, SPRITE_WIDTH) != 0) {
+			DrawSprite(image.sprite, GroundSpritePaletteTransform(image.sprite, image.pal, palette), x, y);
+		}
+	} else {
+		DrawNewGRFTileSeqInGUI(x, y, dts, stage, palette);
+	}
 }
 
 void DrawNewHouseTile(TileInfo *ti, HouseID house_id)
@@ -470,6 +618,15 @@ void DrawNewHouseTile(TileInfo *ti, HouseID house_id)
 		const TileLayoutSpriteGroup *tlgroup = (const TileLayoutSpriteGroup *)group;
 		byte stage = GetHouseBuildingStage(ti->tile);
 		DrawTileLayout(ti, tlgroup, stage, house_id);
+	}
+}
+
+void DrawNewHouseTileInGUI(int x, int y, HouseID house_id, bool ground)
+{
+	FakeHouseResolverObject object(house_id);
+	const SpriteGroup *group = object.Resolve();
+	if (group != nullptr && group->type == SGT_TILELAYOUT) {
+		DrawTileLayoutInGUI(x, y, (const TileLayoutSpriteGroup*)group, house_id, ground);
 	}
 }
 
@@ -503,6 +660,26 @@ void AnimateNewHouseConstruction(TileIndex tile)
 	if (HasBit(hs->callback_mask, CBM_HOUSE_CONSTRUCTION_STATE_CHANGE)) {
 		HouseAnimationBase::ChangeAnimationFrame(CBID_HOUSE_CONSTRUCTION_STATE_CHANGE, hs, Town::GetByTile(tile), tile, 0, 0);
 	}
+}
+
+/**
+ * Check if GRF allows a given house to be constructed (callback 17)
+ * @param house_id house type
+ * @param tile tile where the house is about to be placed
+ * @param t town in which we are building
+ * @param random_bits feature random bits for the house
+ * @return false if callback 17 disallows construction, true in other cases
+ */
+bool HouseAllowsConstruction(HouseID house_id, TileIndex tile, Town *t, byte random_bits)
+{
+	const HouseSpec *hs = HouseSpec::Get(house_id);
+	if (HasBit(hs->callback_mask, CBM_HOUSE_ALLOW_CONSTRUCTION)) {
+		uint16 callback_res = GetHouseCallback(CBID_HOUSE_ALLOW_CONSTRUCTION, 0, 0, house_id, t, tile, true, random_bits);
+		if (callback_res != CALLBACK_FAILED && !Convert8bitBooleanCallback(hs->grf_prop.grffile, CBID_HOUSE_ALLOW_CONSTRUCTION, callback_res)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 bool CanDeleteHouse(TileIndex tile)
@@ -564,22 +741,23 @@ bool NewHouseTileLoop(TileIndex tile)
 
 	/* Check callback 21, which determines if a house should be destroyed. */
 	if (HasBit(hs->callback_mask, CBM_HOUSE_DESTRUCTION)) {
-		uint16 callback_res = GetHouseCallback(CBID_HOUSE_DESTRUCTION, 0, 0, GetHouseType(tile), Town::GetByTile(tile), tile);
+		Town *t = Town::GetByTile(tile);
+		uint16 callback_res = GetHouseCallback(CBID_HOUSE_DESTRUCTION, 0, 0, GetHouseType(tile), t, tile);
 		if (callback_res != CALLBACK_FAILED && Convert8bitBooleanCallback(hs->grf_prop.grffile, CBID_HOUSE_DESTRUCTION, callback_res)) {
-			ClearTownHouse(Town::GetByTile(tile), tile);
+			ClearTownHouse(t, tile);
 			return false;
 		}
 	}
 
 	SetHouseProcessingTime(tile, hs->processing_time);
-	MarkTileDirtyByTile(tile);
+	MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 	return true;
 }
 
 static void DoTriggerHouse(TileIndex tile, HouseTrigger trigger, byte base_random, bool first)
 {
 	/* We can't trigger a non-existent building... */
-	assert(IsTileType(tile, MP_HOUSE));
+	assert_tile(IsTileType(tile, MP_HOUSE), tile);
 
 	HouseID hid = GetHouseType(tile);
 	HouseSpec *hs = HouseSpec::Get(hid);
@@ -612,7 +790,7 @@ static void DoTriggerHouse(TileIndex tile, HouseTrigger trigger, byte base_rando
 		case HOUSE_TRIGGER_TILE_LOOP_TOP:
 			if (!first) {
 				/* The top tile is marked dirty by the usual TileLoop */
-				MarkTileDirtyByTile(tile);
+				MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 				break;
 			}
 			/* Random value of first tile already set. */
@@ -650,7 +828,7 @@ void DoWatchedCargoCallback(TileIndex tile, TileIndex origin, CargoTypes trigger
  */
 void WatchedCargoCallback(TileIndex tile, CargoTypes trigger_cargoes)
 {
-	assert(IsTileType(tile, MP_HOUSE));
+	assert_tile(IsTileType(tile, MP_HOUSE), tile);
 	HouseID id = GetHouseType(tile);
 	const HouseSpec *hs = HouseSpec::Get(id);
 

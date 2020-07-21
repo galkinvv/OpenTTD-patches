@@ -13,6 +13,7 @@
 #include "economy_type.h"
 #include "strings_type.h"
 #include "tile_type.h"
+#include <string>
 
 struct GRFFile;
 
@@ -27,6 +28,7 @@ class CommandCost {
 	bool success;     ///< Whether the comment went fine up to this moment
 	const GRFFile *textref_stack_grffile; ///< NewGRF providing the #TextRefStack content.
 	uint textref_stack_size;   ///< Number of uint32 values to put on the #TextRefStack for the error message.
+	StringID extra_message = INVALID_STRING_ID;    ///< Additional warning message for when success is unset
 
 	static uint32 textref_stack[16];
 
@@ -40,6 +42,16 @@ public:
 	 * Creates a command return value the is failed with the given message
 	 */
 	explicit CommandCost(StringID msg) : expense_type(INVALID_EXPENSES), cost(0), message(msg), success(false), textref_stack_grffile(nullptr), textref_stack_size(0) {}
+
+	/**
+	 * Creates a command return value the is failed with the given message
+	 */
+	static CommandCost DualErrorMessage(StringID msg, StringID extra_msg)
+	{
+		CommandCost cc(msg);
+		cc.extra_message = extra_msg;
+		return cc;
+	}
 
 	/**
 	 * Creates a command cost with given expense type and start cost of 0
@@ -97,11 +109,12 @@ public:
 	 * Makes this #CommandCost behave like an error command.
 	 * @param message The error message.
 	 */
-	void MakeError(StringID message)
+	void MakeError(StringID message, StringID extra_message = INVALID_STRING_ID)
 	{
 		assert(message != INVALID_STRING_ID);
 		this->success = false;
 		this->message = message;
+		this->extra_message = extra_message;
 	}
 
 	void UseTextRefStack(const GRFFile *grffile, uint num_registers);
@@ -144,6 +157,16 @@ public:
 	}
 
 	/**
+	 * Returns the extra error message of a command
+	 * @return the extra error message, if succeeded #INVALID_STRING_ID
+	 */
+	StringID GetExtraErrorMessage() const
+	{
+		if (this->success) return INVALID_STRING_ID;
+		return this->extra_message;
+	}
+
+	/**
 	 * Did this command succeed?
 	 * @return true if and only if it succeeded
 	 */
@@ -160,6 +183,21 @@ public:
 	{
 		return !this->success;
 	}
+
+	/**
+	 * @param cmd_msg optional failure string as passed to DoCommand
+	 * @return an allocated string summarising the command result
+	 */
+	char *AllocSummaryMessage(StringID cmd_msg = 0) const;
+
+	/**
+	 * Write a string summarising the command result
+	 * @param buf buffer to write to
+	 * @param last last byte in buffer
+	 * @param cmd_msg optional failure string as passed to DoCommand
+	 * @return the number of bytes written
+	 */
+	int WriteSummaryMessage(char *buf, char *last, StringID cmd_msg = 0) const;
 };
 
 /**
@@ -185,6 +223,8 @@ enum Commands {
 	CMD_REMOVE_SIGNALS,               ///< remove a signal
 	CMD_TERRAFORM_LAND,               ///< terraform a tile
 	CMD_BUILD_OBJECT,                 ///< build an object
+	CMD_PURCHASE_LAND_AREA,           ///< purchase an area of landscape
+	CMD_BUILD_HOUSE,                  ///< build a house
 	CMD_BUILD_TUNNEL,                 ///< build a tunnel
 
 	CMD_REMOVE_FROM_RAIL_STATION,     ///< remove a (rectangle of) tiles from a rail station
@@ -226,6 +266,7 @@ enum Commands {
 	CMD_SKIP_TO_ORDER,                ///< skip an order to the next of specific one
 	CMD_DELETE_ORDER,                 ///< delete an order
 	CMD_INSERT_ORDER,                 ///< insert a new order
+	CMD_MASS_CHANGE_ORDER,            ///< mass change the target of an order
 
 	CMD_CHANGE_SERVICE_INT,           ///< change the server interval of a vehicle
 
@@ -240,12 +281,15 @@ enum Commands {
 	CMD_WANT_ENGINE_PREVIEW,          ///< confirm the preview of an engine
 	CMD_ENGINE_CTRL,                  ///< control availability of the engine for companies
 
+	CMD_SET_VEHICLE_UNIT_NUMBER,      ///< sets the unit number of a vehicle
+
 	CMD_RENAME_VEHICLE,               ///< rename a whole vehicle
 	CMD_RENAME_ENGINE,                ///< rename a engine (in the engine list)
 	CMD_RENAME_COMPANY,               ///< change the company name
 	CMD_RENAME_PRESIDENT,             ///< change the president name
 	CMD_RENAME_STATION,               ///< rename a station
 	CMD_RENAME_DEPOT,                 ///< rename a depot
+	CMD_SET_STATION_CARGO_ALLOWED_SUPPLY, ///< set station cargo allowed supply
 
 	CMD_PLACE_SIGN,                   ///< place a sign
 	CMD_RENAME_SIGN,                  ///< rename a sign
@@ -273,7 +317,9 @@ enum Commands {
 	CMD_CLEAR_AREA,                   ///< clear an area
 
 	CMD_MONEY_CHEAT,                  ///< do the money cheat
+	CMD_MONEY_CHEAT_ADMIN,            ///< do the money cheat (admin mode)
 	CMD_CHANGE_BANK_BALANCE,          ///< change bank balance to charge costs or give money from a GS
+	CMD_CHEAT_SETTING,                ///< change a cheat setting
 	CMD_BUILD_CANAL,                  ///< build a canal
 
 	CMD_CREATE_SUBSIDY,               ///< create a new subsidy
@@ -310,16 +356,35 @@ enum Commands {
 
 	CMD_SET_AUTOREPLACE,              ///< set an autoreplace entry
 
+	CMD_TOGGLE_REUSE_DEPOT_VEHICLES,  ///< toggle 'reuse depot vehicles' on template
+	CMD_TOGGLE_KEEP_REMAINING_VEHICLES, ///< toggle 'keep remaining vehicles' on template
+	CMD_TOGGLE_REFIT_AS_TEMPLATE,     ///< toggle 'refit as template' on template
+	CMD_TOGGLE_TMPL_REPLACE_OLD_ONLY, ///< toggle 'replace old vehicles only' on template
+
+	CMD_VIRTUAL_TRAIN_FROM_TEMPLATE_VEHICLE, ///< Creates a virtual train from a template
+	CMD_VIRTUAL_TRAIN_FROM_TRAIN,     ///< Creates a virtual train from a regular train
+	CMD_DELETE_VIRTUAL_TRAIN,         ///< Delete a virtual train
+	CMD_BUILD_VIRTUAL_RAIL_VEHICLE,   ///< Build a virtual train
+	CMD_REPLACE_TEMPLATE_VEHICLE,     ///< Replace a template vehicle with another one based on a virtual train
+
+	CMD_CLONE_TEMPLATE_VEHICLE_FROM_TRAIN, ///< clone a train and create a new template vehicle based on it
+	CMD_DELETE_TEMPLATE_VEHICLE,      ///< delete a template vehicle
+
+	CMD_ISSUE_TEMPLATE_REPLACEMENT,   ///< issue a template replacement for a vehicle group
+	CMD_DELETE_TEMPLATE_REPLACEMENT,  ///< delete a template replacement from a vehicle group
+
 	CMD_CLONE_VEHICLE,                ///< clone a vehicle
 	CMD_START_STOP_VEHICLE,           ///< start or stop a vehicle
 	CMD_MASS_START_STOP,              ///< start/stop all vehicles (in a depot)
 	CMD_AUTOREPLACE_VEHICLE,          ///< replace/renew a vehicle while it is in a depot
+	CMD_TEMPLATE_REPLACE_VEHICLE,     ///< template replace a vehicle while it is in a depot
 	CMD_DEPOT_SELL_ALL_VEHICLES,      ///< sell all vehicles which are in a given depot
 	CMD_DEPOT_MASS_AUTOREPLACE,       ///< force the autoreplace to take action in a given depot
 
 	CMD_CREATE_GROUP,                 ///< create a new group
 	CMD_DELETE_GROUP,                 ///< delete a group
 	CMD_ALTER_GROUP,                  ///< alter a group
+	CMD_CREATE_GROUP_FROM_LIST,       ///< create and rename a new group from a vehicle list
 	CMD_ADD_VEHICLE_GROUP,            ///< add a vehicle to a group
 	CMD_ADD_SHARED_VEHICLE_GROUP,     ///< add all other shared vehicles to a group which are missing
 	CMD_REMOVE_ALL_VEHICLES_GROUP,    ///< remove all vehicles from a group
@@ -328,11 +393,43 @@ enum Commands {
 
 	CMD_MOVE_ORDER,                   ///< move an order
 	CMD_CHANGE_TIMETABLE,             ///< change the timetable for a vehicle
+	CMD_BULK_CHANGE_TIMETABLE,        ///< change the timetable for all orders of a vehicle
 	CMD_SET_VEHICLE_ON_TIME,          ///< set the vehicle on time feature (timetable)
 	CMD_AUTOFILL_TIMETABLE,           ///< autofill the timetable
+	CMD_AUTOMATE_TIMETABLE,           ///< automate the timetable
+	CMD_TIMETABLE_SEPARATION,         ///< auto timetable separation
 	CMD_SET_TIMETABLE_START,          ///< set the date that a timetable should start
 
 	CMD_OPEN_CLOSE_AIRPORT,           ///< open/close an airport to incoming aircraft
+
+	CMD_PROGRAM_TRACERESTRICT_SIGNAL, ///< modify a signal tracerestrict program
+	CMD_CREATE_TRACERESTRICT_SLOT,    ///< create a tracerestrict slot
+	CMD_ALTER_TRACERESTRICT_SLOT,     ///< alter a tracerestrict slot
+	CMD_DELETE_TRACERESTRICT_SLOT,    ///< delete a tracerestrict slot
+	CMD_ADD_VEHICLE_TRACERESTRICT_SLOT,    ///< add a vehicle to a tracerestrict slot
+	CMD_REMOVE_VEHICLE_TRACERESTRICT_SLOT, ///< remove a vehicle from a tracerestrict slot
+
+	CMD_INSERT_SIGNAL_INSTRUCTION,    ///< insert a signal instruction
+	CMD_MODIFY_SIGNAL_INSTRUCTION,    ///< modifies a signal instruction
+	CMD_REMOVE_SIGNAL_INSTRUCTION,    ///< removes a signal instruction
+	CMD_SIGNAL_PROGRAM_MGMT,          ///< removes a signal program management command
+
+	CMD_SCHEDULED_DISPATCH,                     ///< scheduled dispatch start
+	CMD_SCHEDULED_DISPATCH_ADD,                 ///< scheduled dispatch add
+	CMD_SCHEDULED_DISPATCH_REMOVE,              ///< scheduled dispatch remove
+	CMD_SCHEDULED_DISPATCH_SET_DURATION,        ///< scheduled dispatch set schedule duration
+	CMD_SCHEDULED_DISPATCH_SET_START_DATE,      ///< scheduled dispatch set start date
+	CMD_SCHEDULED_DISPATCH_SET_DELAY,           ///< scheduled dispatch set maximum allow delay
+	CMD_SCHEDULED_DISPATCH_RESET_LAST_DISPATCH, ///< scheduled dispatch reset last dispatch date
+
+	CMD_ADD_PLAN,
+	CMD_ADD_PLAN_LINE,
+	CMD_REMOVE_PLAN,
+	CMD_REMOVE_PLAN_LINE,
+	CMD_CHANGE_PLAN_VISIBILITY,
+	CMD_RENAME_PLAN,
+
+	CMD_DESYNC_CHECK,                 ///< Force desync checks to be run
 
 	CMD_END,                          ///< Must ALWAYS be on the end of this list!! (period)
 };
@@ -356,6 +453,7 @@ enum DoCommandFlag {
 	DC_ALL_TILES             = 0x200, ///< allow this command also on MP_VOID tiles
 	DC_NO_MODIFY_TOWN_RATING = 0x400, ///< do not change town rating
 	DC_FORCE_CLEAR_TILE      = 0x800, ///< do not only remove the object on the tile, but also clear any water left on it
+	DC_ALLOW_REMOVE_WATER    = 0x1000,///< always allow removing water
 };
 DECLARE_ENUM_AS_BIT_SET(DoCommandFlag)
 
@@ -387,17 +485,19 @@ enum FlaggedCommands {
  * This enumeration defines flags for the _command_proc_table.
  */
 enum CommandFlags {
-	CMD_SERVER    = 0x001, ///< the command can only be initiated by the server
-	CMD_SPECTATOR = 0x002, ///< the command may be initiated by a spectator
-	CMD_OFFLINE   = 0x004, ///< the command cannot be executed in a multiplayer game; single-player only
-	CMD_AUTO      = 0x008, ///< set the DC_AUTO flag on this command
-	CMD_ALL_TILES = 0x010, ///< allow this command also on MP_VOID tiles
-	CMD_NO_TEST   = 0x020, ///< the command's output may differ between test and execute due to town rating changes etc.
-	CMD_NO_WATER  = 0x040, ///< set the DC_NO_WATER flag on this command
-	CMD_CLIENT_ID = 0x080, ///< set p2 with the ClientID of the sending client.
-	CMD_DEITY     = 0x100, ///< the command may be executed by COMPANY_DEITY
-	CMD_STR_CTRL  = 0x200, ///< the command's string may contain control strings
-	CMD_NO_EST    = 0x400, ///< the command is never estimated.
+	CMD_SERVER    =  0x001, ///< the command can only be initiated by the server
+	CMD_SPECTATOR =  0x002, ///< the command may be initiated by a spectator
+	CMD_OFFLINE   =  0x004, ///< the command cannot be executed in a multiplayer game; single-player only
+	CMD_AUTO      =  0x008, ///< set the DC_AUTO flag on this command
+	CMD_ALL_TILES =  0x010, ///< allow this command also on MP_VOID tiles
+	CMD_NO_TEST   =  0x020, ///< the command's output may differ between test and execute due to town rating changes etc.
+	CMD_NO_WATER  =  0x040, ///< set the DC_NO_WATER flag on this command
+	CMD_CLIENT_ID =  0x080, ///< set p2 with the ClientID of the sending client.
+	CMD_DEITY     =  0x100, ///< the command may be executed by COMPANY_DEITY
+	CMD_STR_CTRL  =  0x200, ///< the command's string may contain control strings
+	CMD_NO_EST    =  0x400, ///< the command is never estimated.
+	CMD_PROCEX    =  0x800, ///< the command proc function has extended parameters
+	CMD_SERVER_NS = 0x1000, ///< the command can only be initiated by the server (this is not executed in spectator mode)
 };
 DECLARE_ENUM_AS_BIT_SET(CommandFlags)
 
@@ -443,6 +543,7 @@ enum CommandPauseLevel {
  * @return The CommandCost of the command, which can be succeeded or failed.
  */
 typedef CommandCost CommandProc(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text);
+typedef CommandCost CommandProcEx(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text, uint32 binary_length);
 
 /**
  * Define a command with the flags which belongs to it.
@@ -451,10 +552,26 @@ typedef CommandCost CommandProc(TileIndex tile, DoCommandFlag flags, uint32 p1, 
  * the #CMD_AUTO, #CMD_OFFLINE and #CMD_SERVER values.
  */
 struct Command {
-	CommandProc *proc;  ///< The procedure to actually executing
+	union {
+		CommandProc *proc;      ///< The procedure to actually execute
+		CommandProcEx *procex;  ///< The procedure to actually execute, extended parameters
+	};
 	const char *name;   ///< A human readable name for the procedure
 	CommandFlags flags; ///< The (command) flags to that apply to this command
 	CommandType type;   ///< The type of command.
+
+	Command(CommandProc *proc, const char *name, CommandFlags flags, CommandType type)
+			: proc(proc), name(name), flags(flags & ~CMD_PROCEX), type(type) {}
+	Command(CommandProcEx *procex, const char *name, CommandFlags flags, CommandType type)
+			: procex(procex), name(name), flags(flags | CMD_PROCEX), type(type) {}
+
+	inline CommandCost Execute(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text, uint32 binary_length) const {
+		if (this->flags & CMD_PROCEX) {
+			return this->procex(tile, flags, p1, p2, text, binary_length);
+		} else {
+			return this->proc(tile, flags, p1, p2, text);
+		}
+	}
 };
 
 /**
@@ -472,6 +589,8 @@ struct Command {
  */
 typedef void CommandCallback(const CommandCost &result, TileIndex tile, uint32 p1, uint32 p2, uint32 cmd);
 
+#define MAX_CMD_TEXT_LENGTH 32000
+
 /**
  * Structure for buffering the build command when selecting a station to join.
  */
@@ -481,7 +600,8 @@ struct CommandContainer {
 	uint32 p2;                       ///< parameter p2.
 	uint32 cmd;                      ///< command being executed.
 	CommandCallback *callback;       ///< any callback function executed upon successful completion of the command.
-	char text[32 * MAX_CHAR_LENGTH]; ///< possible text sent for name changes etc, in bytes including '\0'.
+	uint32 binary_length;            ///< in case text contains binary data, this describes its length.
+	std::string text;                ///< possible text sent for name changes etc.
 };
 
 #endif /* COMMAND_TYPE_H */

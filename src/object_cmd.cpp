@@ -60,7 +60,7 @@ uint16 Object::counts[NUM_OBJECTS];
  */
 ObjectType GetObjectType(TileIndex t)
 {
-	assert(IsTileType(t, MP_OBJECT));
+	assert_tile(IsTileType(t, MP_OBJECT), t);
 	return Object::GetByTile(t)->type;
 }
 
@@ -122,7 +122,7 @@ void BuildObject(ObjectType type, TileIndex tile, CompanyID owner, Town *town, u
 			DirtyCompanyInfrastructureWindows(owner);
 		}
 		MakeObject(t, owner, o->index, wc, Random());
-		MarkTileDirtyByTile(t);
+		MarkTileDirtyByTile(t, ZOOM_LVL_DRAW_MAP);
 	}
 
 	Object::IncTypeCount(type);
@@ -138,7 +138,7 @@ static void IncreaseAnimationStage(TileIndex tile)
 	TileArea ta = Object::GetByTile(tile)->location;
 	TILE_AREA_LOOP(t, ta) {
 		SetAnimationFrame(t, GetAnimationFrame(t) + 1);
-		MarkTileDirtyByTile(t);
+		MarkTileDirtyByTile(t, ZOOM_LVL_DRAW_MAP);
 	}
 }
 
@@ -174,6 +174,8 @@ void UpdateCompanyHQ(TileIndex tile, uint score)
 void UpdateObjectColours(const Company *c)
 {
 	for (Object *obj : Object::Iterate()) {
+		if (!IsTileType(obj->location.tile, MP_OBJECT)) continue;
+
 		Owner owner = GetTileOwner(obj->location.tile);
 		/* Not the current owner, so colour doesn't change. */
 		if (owner != c->index) continue;
@@ -222,6 +224,7 @@ CommandCost CmdBuildObject(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 	TileArea ta(tile, size_x, size_y);
 
 	if (type == OBJECT_OWNED_LAND) {
+		if (_settings_game.construction.purchase_land_permitted == 0) return_cmd_error(STR_PURCHASE_LAND_NOT_PERMITTED);
 		/* Owned land is special as it can be placed on any slope. */
 		cost.AddCost(DoCommand(tile, 0, 0, flags, CMD_LANDSCAPE_CLEAR));
 	} else {
@@ -290,15 +293,18 @@ CommandCost CmdBuildObject(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 	if (cost.Failed()) return cost;
 
 	/* Finally do a check for bridges. */
-	TILE_AREA_LOOP(t, ta) {
-		if (IsBridgeAbove(t) && (
-				!(spec->flags & OBJECT_FLAG_ALLOW_UNDER_BRIDGE) ||
-				(GetTileMaxZ(t) + spec->height >= GetBridgeHeight(GetSouthernBridgeEnd(t))))) {
-			return_cmd_error(STR_ERROR_MUST_DEMOLISH_BRIDGE_FIRST);
+	if (type < NEW_OBJECT_OFFSET || !_settings_game.construction.allow_grf_objects_under_bridges) {
+		TILE_AREA_LOOP(t, ta) {
+			if (IsBridgeAbove(t) && (
+					!(spec->flags & OBJECT_FLAG_ALLOW_UNDER_BRIDGE) ||
+					(GetTileMaxZ(t) + spec->height >= GetBridgeHeight(GetSouthernBridgeEnd(t))))) {
+				return_cmd_error(STR_ERROR_MUST_DEMOLISH_BRIDGE_FIRST);
+			}
 		}
 	}
 
 	int hq_score = 0;
+	Company *c = nullptr;
 	switch (type) {
 		case OBJECT_TRANSMITTER:
 		case OBJECT_LIGHTHOUSE:
@@ -310,6 +316,10 @@ CommandCost CmdBuildObject(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 					IsTileOwner(tile, _current_company) &&
 					IsObjectType(tile, OBJECT_OWNED_LAND)) {
 				return_cmd_error(STR_ERROR_YOU_ALREADY_OWN_IT);
+			}
+			c = Company::GetIfValid(_current_company);
+			if (c != nullptr && (int)GB(c->purchase_land_limit, 16, 16) < 1) {
+				return_cmd_error(STR_ERROR_PURCHASE_LAND_LIMIT_REACHED);
 			}
 			break;
 
@@ -343,16 +353,74 @@ CommandCost CmdBuildObject(TileIndex tile, DoCommandFlag flags, uint32 p1, uint3
 
 		/* Make sure the HQ starts at the right size. */
 		if (type == OBJECT_HQ) UpdateCompanyHQ(tile, hq_score);
+
+		if (type == OBJECT_OWNED_LAND && c != nullptr) c->purchase_land_limit -= 1 << 16;
 	}
 
 	cost.AddCost(ObjectSpec::Get(type)->GetBuildCost() * size_x * size_y);
 	return cost;
 }
 
+/**
+ * Buy a big piece of landscape
+ * @param tile end tile of area dragging
+ * @param flags of operation to conduct
+ * @param p1 start tile of area dragging
+ * @param p2 various bitstuffed data.
+ *  bit      0: Whether to use the Orthogonal (0) or Diagonal (1) iterator.
+ * @param text unused
+ * @return the cost of this operation or an error
+ */
+CommandCost CmdPurchaseLandArea(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const char *text)
+{
+	if (p1 >= MapSize()) return CMD_ERROR;
+	if (_settings_game.construction.purchase_land_permitted == 0) return_cmd_error(STR_PURCHASE_LAND_NOT_PERMITTED);
+	if (_settings_game.construction.purchase_land_permitted != 2) return_cmd_error(STR_PURCHASE_LAND_NOT_PERMITTED_BULK);
+
+	Money money = GetAvailableMoneyForCommand();
+	CommandCost cost(EXPENSES_CONSTRUCTION);
+	CommandCost last_error = CMD_ERROR;
+	bool had_success = false;
+
+	const Company *c = Company::GetIfValid(_current_company);
+	int limit = (c == nullptr ? INT32_MAX : GB(c->purchase_land_limit, 16, 16));
+
+	TileIterator *iter = HasBit(p2, 0) ? (TileIterator *)new DiagonalTileIterator(tile, p1) : new OrthogonalTileIterator(tile, p1);
+	for (; *iter != INVALID_TILE; ++(*iter)) {
+		TileIndex t = *iter;
+		CommandCost ret = DoCommand(t, OBJECT_OWNED_LAND, 0, flags & ~DC_EXEC, CMD_BUILD_OBJECT);
+		if (ret.Failed()) {
+			last_error = ret;
+
+			/* We may not clear more tiles. */
+			if (c != nullptr && GB(c->purchase_land_limit, 16, 16) < 1) break;
+			continue;
+		}
+
+		had_success = true;
+		if (flags & DC_EXEC) {
+			money -= ret.GetCost();
+			if (ret.GetCost() > 0 && money < 0) {
+				_additional_cash_required = ret.GetCost();
+				delete iter;
+				return cost;
+			}
+			DoCommand(t, OBJECT_OWNED_LAND, 0, flags, CMD_BUILD_OBJECT);
+		} else {
+			/* When we're at the clearing limit we better bail (unneed) testing as well. */
+			if (ret.GetCost() != 0 && --limit <= 0) break;
+		}
+		cost.AddCost(ret);
+	}
+
+	delete iter;
+	return had_success ? cost : last_error;
+}
+
 
 static Foundation GetFoundation_Object(TileIndex tile, Slope tileh);
 
-static void DrawTile_Object(TileInfo *ti)
+static void DrawTile_Object(TileInfo *ti, DrawTileProcParams params)
 {
 	ObjectType type = GetObjectType(ti->tile);
 	const ObjectSpec *spec = ObjectSpec::Get(type);
@@ -631,7 +699,7 @@ static bool ClickTile_Object(TileIndex tile)
 	return true;
 }
 
-static void AnimateTile_Object(TileIndex tile)
+void AnimateTile_Object(TileIndex tile)
 {
 	AnimateNewObjectTile(tile);
 }

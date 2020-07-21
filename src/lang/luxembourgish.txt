@@ -2113,7 +2113,6 @@ STR_NETWORK_COMPANY_LIST_NEW_COMPANY                            :Nei Firma
 # Network client list
 STR_NETWORK_CLIENTLIST_KICK                                     :Kicken
 STR_NETWORK_CLIENTLIST_BAN                                      :Bannen
-STR_NETWORK_CLIENTLIST_GIVE_MONEY                               :Sue ginn
 STR_NETWORK_CLIENTLIST_SPEAK_TO_ALL                             :Mat alle schwetzen
 STR_NETWORK_CLIENTLIST_SPEAK_TO_COMPANY                         :Mat der Firma schwetzen
 STR_NETWORK_CLIENTLIST_SPEAK_TO_CLIENT                          :Privatmessage
@@ -2121,8 +2120,6 @@ STR_NETWORK_CLIENTLIST_SPEAK_TO_CLIENT                          :Privatmessage
 STR_NETWORK_SERVER                                              :Server
 STR_NETWORK_CLIENT                                              :Spiller
 STR_NETWORK_SPECTATORS                                          :Zuschauer
-
-STR_NETWORK_GIVE_MONEY_CAPTION                                  :{WHITE}Gëff de Betrag un deens du wëlls ginn
 
 # Network set password
 STR_COMPANY_PASSWORD_CANCEL                                     :{BLACK}Späicher d'Passwuert net
@@ -3360,6 +3357,7 @@ STR_COMPANY_VIEW_RELOCATE_HQ                                    :{BLACK}Firmenha
 STR_COMPANY_VIEW_RELOCATE_COMPANY_HEADQUARTERS                  :{BLACK}Bau d'Firmenhaaptgebai op eng aaner Plaz.Käschten: 1% vun dem Firmewäert. Shift+Klick weist ongeféier Käschten ouni ze réckelen
 STR_COMPANY_VIEW_INFRASTRUCTURE_BUTTON                          :{BLACK}Detailer
 STR_COMPANY_VIEW_INFRASTRUCTURE_TOOLTIP                         :{BLACK}Detailléiert Infrastrukturen uweisen
+STR_COMPANY_VIEW_GIVE_MONEY_BUTTON                              :{BLACK}Suen ginn
 
 STR_COMPANY_VIEW_NEW_FACE_BUTTON                                :{BLACK}Neit Gesiicht
 STR_COMPANY_VIEW_NEW_FACE_TOOLTIP                               :{BLACK}Wielt en neit Gesiicht fir de Manager
@@ -3377,6 +3375,7 @@ STR_COMPANY_VIEW_SELL_SHARE_TOOLTIP                             :{BLACK}Verkaaft
 
 STR_COMPANY_VIEW_COMPANY_NAME_QUERY_CAPTION                     :Firmennumm
 STR_COMPANY_VIEW_PRESIDENT_S_NAME_QUERY_CAPTION                 :Numm vum Manager
+STR_COMPANY_VIEW_GIVE_MONEY_QUERY_CAPTION                       :Gëff den Betrag un deenst du wëlls ginn
 
 STR_BUY_COMPANY_MESSAGE                                         :{WHITE}Mir sichen eng Transportfirma déi eis Firma iwwerhuelen wëll.{}{}Wëlls du {COMPANY} fir {CURRENCY_LONG} kafen?
 

@@ -31,6 +31,26 @@ void Blitter_32bppBase::DrawLine(void *video, int x, int y, int x2, int y2, int 
 	});
 }
 
+void Blitter_32bppBase::SetLine(void *video, int x, int y, uint8 *colours, uint width)
+{
+	Colour *dst = (Colour *)video + x + y * _screen.pitch;
+	do {
+		*dst = LookupColourInPalette(*colours);
+		dst++;
+		colours++;
+	} while (--width);
+}
+
+void Blitter_32bppBase::SetLine32(void *video, int x, int y, uint32 *colours, uint width)
+{
+	Colour *dst = (Colour *)video + x + y * _screen.pitch;
+	do {
+		*dst = *colours;
+		dst++;
+		colours++;
+	} while (--width);
+}
+
 void Blitter_32bppBase::DrawRect(void *video, int width, int height, uint8 colour)
 {
 	Colour colour32 = LookupColourInPalette(colour);
@@ -81,7 +101,7 @@ void Blitter_32bppBase::CopyImageToBuffer(const void *video, void *dst, int widt
 	}
 }
 
-void Blitter_32bppBase::ScrollBuffer(void *video, int &left, int &top, int &width, int &height, int scroll_x, int scroll_y)
+void Blitter_32bppBase::ScrollBuffer(void *video, int left, int top, int width, int height, int scroll_x, int scroll_y)
 {
 	const uint32 *src;
 	uint32 *dst;
@@ -94,7 +114,7 @@ void Blitter_32bppBase::ScrollBuffer(void *video, int &left, int &top, int &widt
 		/* Decrease height and increase top */
 		top += scroll_y;
 		height -= scroll_y;
-		assert(height > 0);
+		assert_msg(height > 0, "%d, %d, %d, %d, %d, %d", left, top, width, height, scroll_x, scroll_y);
 
 		/* Adjust left & width */
 		if (scroll_x >= 0) {
@@ -118,7 +138,7 @@ void Blitter_32bppBase::ScrollBuffer(void *video, int &left, int &top, int &widt
 
 		/* Decrease height. (scroll_y is <=0). */
 		height += scroll_y;
-		assert(height > 0);
+		assert_msg(height > 0, "%d, %d, %d, %d, %d, %d", left, top, width, height, scroll_x, scroll_y);
 
 		/* Adjust left & width */
 		if (scroll_x >= 0) {

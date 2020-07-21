@@ -581,6 +581,7 @@ static void FillGrfidMap(const GRFConfig *c, GrfIdMap *grfid_map)
 
 static void NewGRFConfirmationCallback(Window *w, bool confirmed);
 static void ShowSavePresetWindow(const char *initial_text);
+void PostCheckNewGRFLoadWarnings();
 
 /**
  * Window for showing NewGRF files
@@ -667,6 +668,7 @@ struct NewGRFWindow : public Window, NewGRFScanCallback {
 			CopyGRFConfigList(this->orig_list, this->actives, true);
 			ResetGRFConfig(false);
 			ReloadNewGRFData();
+			PostCheckNewGRFLoadWarnings();
 		}
 
 		/* Remove the temporary copy of grf-list used in window */
@@ -963,8 +965,14 @@ struct NewGRFWindow : public Window, NewGRFScanCallback {
 					GRFConfig *c = *pc;
 					if (c->next == this->active_sel) {
 						c->next = this->active_sel->next;
-						this->active_sel->next = c;
-						*pc = this->active_sel;
+						if (_ctrl_pressed) {
+							this->active_sel->next = this->actives;
+							this->actives = this->active_sel;
+							pos = 0;
+						} else {
+							this->active_sel->next = c;
+							*pc = this->active_sel;
+						}
 						break;
 					}
 				}
@@ -984,7 +992,7 @@ struct NewGRFWindow : public Window, NewGRFScanCallback {
 						*pc = c->next;
 						c->next = c->next->next;
 						(*pc)->next = c;
-						break;
+						if (!_ctrl_pressed || c->next == nullptr) break;
 					}
 				}
 				this->vscroll->ScrollTowards(pos);
@@ -1095,6 +1103,7 @@ struct NewGRFWindow : public Window, NewGRFScanCallback {
 					CopyGRFConfigList(this->orig_list, this->actives, true);
 					ResetGRFConfig(false);
 					ReloadNewGRFData();
+					PostCheckNewGRFLoadWarnings();
 				}
 				this->DeleteChildWindows(WC_QUERY_STRING); // Remove the parameter query window
 				break;
@@ -1512,7 +1521,7 @@ private:
 			if (!HasBit((*list)->flags, GCF_STATIC)) count++;
 		}
 		if (entry == nullptr) entry = list;
-		if (count >= NETWORK_MAX_GRF_COUNT) {
+		if (count >= MAX_NEWGRFS) {
 			ShowErrorMessage(STR_NEWGRF_TOO_MANY_NEWGRFS, INVALID_STRING_ID, WL_INFO);
 			return false;
 		}
@@ -1778,6 +1787,17 @@ public:
 		this->acs->Draw(w);
 		this->inf->Draw(w);
 	}
+
+	void FillDirtyWidgets(std::vector<NWidgetBase *> &dirty_widgets) override
+	{
+		if (this->base_flags & WBF_DIRTY) {
+			dirty_widgets.push_back(this);
+		} else {
+			if (this->editable) this->avs->FillDirtyWidgets(dirty_widgets);
+			this->acs->FillDirtyWidgets(dirty_widgets);
+			this->inf->FillDirtyWidgets(dirty_widgets);
+		}
+	}
 };
 
 const uint NWidgetNewGRFDisplay::INTER_LIST_SPACING      = WD_RESIZEBOX_WIDTH + 1;
@@ -1963,6 +1983,7 @@ static void NewGRFConfirmationCallback(Window *w, bool confirmed)
 		GamelogGRFUpdate(_grfconfig, nw->actives); // log GRF changes
 		CopyGRFConfigList(nw->orig_list, nw->actives, false);
 		ReloadNewGRFData();
+		PostCheckNewGRFLoadWarnings();
 		GamelogStopAction();
 
 		/* Show new, updated list */
@@ -1981,6 +2002,12 @@ static void NewGRFConfirmationCallback(Window *w, bool confirmed)
 	}
 }
 
+void PostCheckNewGRFLoadWarnings()
+{
+	if (_grf_bug_too_many_strings) {
+		ShowErrorMessage(STR_NEWGRF_TOO_MANY_STRINGS, STR_NEWGRF_TOO_MANY_STRINGS_DETAIL, WL_WARNING);
+	}
+}
 
 
 /**

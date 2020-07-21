@@ -81,6 +81,7 @@ struct StatusBarWindow : Window {
 	int ticker_scroll;
 	GUITimer ticker_timer;
 	GUITimer reminder_timeout;
+	int64 last_minute = 0;
 
 	static const int TICKER_STOP    = 1640; ///< scrolling is finished when counter reaches this value
 	static const int REMINDER_START = 1350; ///< time in ms for reminder notification (red dot on the right) to stay
@@ -140,8 +141,8 @@ struct StatusBarWindow : Window {
 		switch (widget) {
 			case WID_S_LEFT:
 				/* Draw the date */
-				SetDParam(0, _date);
-				DrawString(r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT, r.top + WD_FRAMERECT_TOP, STR_WHITE_DATE_LONG, TC_FROMSTRING, SA_HOR_CENTER);
+				SetDParam(0, _scaled_date_ticks);
+				DrawString(r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT, r.top + WD_FRAMERECT_TOP, STR_WHITE_DATE_WALLCLOCK_LONG, TC_FROMSTRING, SA_HOR_CENTER);
 				break;
 
 			case WID_S_RIGHT: {
@@ -161,7 +162,8 @@ struct StatusBarWindow : Window {
 				} else if (_do_autosave) {
 					DrawString(r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT, r.top + WD_FRAMERECT_TOP, STR_STATUSBAR_AUTOSAVE, TC_FROMSTRING, SA_HOR_CENTER);
 				} else if (_pause_mode != PM_UNPAUSED) {
-					DrawString(r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT, r.top + WD_FRAMERECT_TOP, STR_STATUSBAR_PAUSED, TC_FROMSTRING, SA_HOR_CENTER);
+					StringID msg = (_pause_mode & PM_PAUSED_LINK_GRAPH) ? STR_STATUSBAR_PAUSED_LINK_GRAPH : STR_STATUSBAR_PAUSED;
+					DrawString(r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT, r.top + WD_FRAMERECT_TOP, msg, TC_FROMSTRING, SA_HOR_CENTER);
 				} else if (this->ticker_scroll < TICKER_STOP && _statusbar_news_item != nullptr && _statusbar_news_item->string_id != 0) {
 					/* Draw the scrolling news text */
 					if (!DrawScrollingStatusText(_statusbar_news_item, ScaleGUITrad(this->ticker_scroll), r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT, r.top + WD_FRAMERECT_TOP, r.bottom)) {
@@ -222,6 +224,11 @@ struct StatusBarWindow : Window {
 	{
 		if (_pause_mode != PM_UNPAUSED) return;
 
+		if (_settings_time.time_in_minutes && this->last_minute != CURRENT_MINUTE) {
+			this->last_minute = CURRENT_MINUTE;
+			this->SetWidgetDirty(WID_S_LEFT);
+		}
+
 		if (this->ticker_scroll < TICKER_STOP) { // Scrolling text
 			uint count = this->ticker_timer.CountElapsed(delta_ms);
 			if (count > 0) {
@@ -239,7 +246,7 @@ struct StatusBarWindow : Window {
 
 static const NWidgetPart _nested_main_status_widgets[] = {
 	NWidget(NWID_HORIZONTAL),
-		NWidget(WWT_PANEL, COLOUR_GREY, WID_S_LEFT), SetMinimalSize(140, 12), EndContainer(),
+		NWidget(WWT_PANEL, COLOUR_GREY, WID_S_LEFT), SetMinimalSize(160, 12), EndContainer(),
 		NWidget(WWT_PUSHBTN, COLOUR_GREY, WID_S_MIDDLE), SetMinimalSize(40, 12), SetDataTip(0x0, STR_STATUSBAR_TOOLTIP_SHOW_LAST_NEWS), SetResize(1, 0),
 		NWidget(WWT_PUSHBTN, COLOUR_GREY, WID_S_RIGHT), SetMinimalSize(140, 12),
 	EndContainer(),

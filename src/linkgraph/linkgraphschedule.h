@@ -10,7 +10,9 @@
 #ifndef LINKGRAPHSCHEDULE_H
 #define LINKGRAPHSCHEDULE_H
 
+#include "../thread.h"
 #include "linkgraph.h"
+#include <memory>
 
 class LinkGraphJob;
 
@@ -38,11 +40,11 @@ private:
 	LinkGraphSchedule();
 	~LinkGraphSchedule();
 	typedef std::list<LinkGraph *> GraphList;
-	typedef std::list<LinkGraphJob *> JobList;
+	typedef std::list<std::unique_ptr<LinkGraphJob>> JobList;
 	friend const SaveLoad *GetLinkGraphScheduleDesc();
 
 protected:
-	ComponentHandler *handlers[6]; ///< Handlers to be run for each job.
+	std::unique_ptr<ComponentHandler> handlers[6]; ///< Handlers to be run for each job.
 	GraphList schedule;            ///< Queue for new jobs.
 	JobList running;               ///< Currently running jobs.
 
@@ -55,6 +57,7 @@ public:
 	static void Clear();
 
 	void SpawnNext();
+	bool IsJoinWithUnfinishedJobDue() const;
 	void JoinNext();
 	void SpawnAll();
 	void ShiftDates(int interval);
@@ -74,6 +77,34 @@ public:
 	 * @param lg Link graph to be removed.
 	 */
 	void Unqueue(LinkGraph *lg) { this->schedule.remove(lg); }
+};
+
+class LinkGraphJobGroup : public std::enable_shared_from_this<LinkGraphJobGroup> {
+	friend LinkGraphJob;
+
+private:
+	std::thread thread;                      ///< Thread the job group is running in or nullptr if it's running in the main thread.
+	const std::vector<LinkGraphJob *> jobs;  ///< The set of jobs in this job set
+
+private:
+	struct constructor_token { };
+	static void Run(void *group);
+	void SpawnThread();
+	void JoinThread();
+
+public:
+	LinkGraphJobGroup(constructor_token token, std::vector<LinkGraphJob *> jobs);
+
+	struct JobInfo {
+		LinkGraphJob * job;
+		uint cost_estimate;
+
+		JobInfo(LinkGraphJob *job);
+		JobInfo(LinkGraphJob *job, uint cost_estimate) :
+				job(job), cost_estimate(cost_estimate) { }
+	};
+
+	static void ExecuteJobSet(std::vector<JobInfo> jobs);
 };
 
 #endif /* LINKGRAPHSCHEDULE_H */

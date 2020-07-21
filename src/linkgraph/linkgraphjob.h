@@ -11,12 +11,15 @@
 #define LINKGRAPHJOB_H
 
 #include "../thread.h"
+#include "../core/dyn_arena_alloc.hpp"
 #include "linkgraph.h"
-#include <list>
+#include <vector>
+#include <memory>
 
 class LinkGraphJob;
 class Path;
-typedef std::list<Path *> PathList;
+class LinkGraphJobGroup;
+typedef std::vector<Path *> PathList;
 
 /** Type of the pool for link graph jobs. */
 typedef Pool<LinkGraphJob, LinkGraphJobID, 32, 0xFFFF> LinkGraphJobPool;
@@ -43,6 +46,7 @@ private:
 	 */
 	struct NodeAnnotation {
 		uint undelivered_supply; ///< Amount of supply that hasn't been distributed yet.
+		uint received_demand;    ///< Received demand towards this node.
 		PathList paths;          ///< Paths through this node, sorted so that those with flow == 0 are in the back.
 		FlowStatMap flows;       ///< Planned flows to other nodes.
 		void Init(uint supply);
@@ -52,21 +56,30 @@ private:
 	typedef SmallMatrix<EdgeAnnotation> EdgeAnnotationMatrix;
 
 	friend const SaveLoad *GetLinkGraphJobDesc();
+	friend void GetLinkGraphJobDayLengthScaleAfterLoad(LinkGraphJob *lgj);
 	friend class LinkGraphSchedule;
+	friend class LinkGraphJobGroup;
 
 protected:
 	const LinkGraph link_graph;       ///< Link graph to by analyzed. Is copied when job is started and mustn't be modified later.
+	std::shared_ptr<LinkGraphJobGroup> group; ///< JOb group thread the job is running in or nullptr if it's running in the main thread.
 	const LinkGraphSettings settings; ///< Copy of _settings_game.linkgraph at spawn time.
-	std::thread thread;               ///< Thread the job is running in or a default-constructed thread if it's running in the main thread.
-	Date join_date;                   ///< Date when the job is to be joined.
+	DateTicks join_date_ticks;        ///< Date when the job is to be joined.
+	DateTicks start_date_ticks;       ///< Date when the job was started.
 	NodeAnnotationVector nodes;       ///< Extra node data necessary for link graph calculation.
 	EdgeAnnotationMatrix edges;       ///< Extra edge data necessary for link graph calculation.
+	bool job_completed;               ///< Is the job still running. This is accessed by multiple threads and is permitted to be spuriously incorrect.
+	bool abort_job;                   ///< Abort the job at the next available opportunity. This is accessed by multiple threads.
 
 	void EraseFlows(NodeID from);
 	void JoinThread();
-	void SpawnThread();
+	void SetJobGroup(std::shared_ptr<LinkGraphJobGroup> group);
 
 public:
+
+	DynUniformArenaAllocator path_allocator; ///< Arena allocator used for paths
+
+	bool IsJobAborted() const;
 
 	/**
 	 * A job edge. Wraps a link graph edge and an edge annotation. The
@@ -224,6 +237,12 @@ public:
 		uint UndeliveredSupply() const { return this->node_anno.undelivered_supply; }
 
 		/**
+		 * Get amount of supply that hasn't been delivered, yet.
+		 * @return Undelivered supply.
+		 */
+		uint ReceivedDemand() const { return this->node_anno.received_demand; }
+
+		/**
 		 * Get the flows running through this node.
 		 * @return Flows.
 		 */
@@ -258,6 +277,15 @@ public:
 			this->node_anno.undelivered_supply -= amount;
 			(*this)[to].AddDemand(amount);
 		}
+
+		/**
+		 * Receive some demand, adding demand to the respective edge.
+		 * @param amount Amount of demand to be received.
+		 */
+		void ReceiveDemand(uint amount)
+		{
+			this->node_anno.received_demand += amount;
+		}
 	};
 
 	/**
@@ -265,30 +293,41 @@ public:
 	 * settings have to be brutally const-casted in order to populate them.
 	 */
 	LinkGraphJob() : settings(_settings_game.linkgraph),
-			join_date(INVALID_DATE) {}
+			join_date_ticks(INVALID_DATE), start_date_ticks(INVALID_DATE), job_completed(false), abort_job(false) {}
 
-	LinkGraphJob(const LinkGraph &orig);
+	LinkGraphJob(const LinkGraph &orig, uint duration_multiplier);
 	~LinkGraphJob();
 
 	void Init();
+	void FinaliseJob();
+
+	bool IsJobCompleted() const;
+	void AbortJob();
 
 	/**
 	 * Check if job is supposed to be finished.
+	 * @param tick_offset Optional number of ticks to add to the current date
 	 * @return True if job should be finished by now, false if not.
 	 */
-	inline bool IsFinished() const { return this->join_date <= _date; }
+	inline bool IsFinished(int tick_offset = 0) const { return this->join_date_ticks <= (_date * DAY_TICKS) + _date_fract + tick_offset; }
 
 	/**
 	 * Get the date when the job should be finished.
 	 * @return Join date.
 	 */
-	inline Date JoinDate() const { return join_date; }
+	inline DateTicks JoinDateTicks() const { return join_date_ticks; }
+
+	/**
+	 * Get the date when the job was started.
+	 * @return Start date.
+	 */
+	inline DateTicks StartDateTicks() const { return start_date_ticks; }
 
 	/**
 	 * Change the join date on date cheating.
 	 * @param interval Number of days to add.
 	 */
-	inline void ShiftJoinDate(int interval) { this->join_date += interval; }
+	inline void ShiftJoinDate(int interval) { this->join_date_ticks += interval * DAY_TICKS; }
 
 	/**
 	 * Get the link graph settings for this component.
@@ -350,7 +389,7 @@ public:
 	inline NodeID GetOrigin() const { return this->origin; }
 
 	/** Get the parent leg of this one. */
-	inline Path *GetParent() { return this->parent; }
+	inline Path *GetParent() { return reinterpret_cast<Path *>(this->parent_storage & ~1); }
 
 	/** Get the overall capacity of the path. */
 	inline uint GetCapacity() const { return this->capacity; }
@@ -399,14 +438,17 @@ public:
 	 */
 	inline void Detach()
 	{
-		if (this->parent != nullptr) {
-			this->parent->num_children--;
-			this->parent = nullptr;
+		if (this->GetParent() != nullptr) {
+			this->GetParent()->num_children--;
+			this->SetParent(nullptr);
 		}
 	}
 
 	uint AddFlow(uint f, LinkGraphJob &job, uint max_saturation);
 	void Fork(Path *base, uint cap, int free_cap, uint dist);
+
+	inline bool GetAnnosSetFlag() const { return HasBit(this->parent_storage, 0); }
+	inline void SetAnnosSetFlag(bool flag) { SB(this->parent_storage, 0, 1, flag ? 1 : 0); }
 
 protected:
 
@@ -426,7 +468,11 @@ protected:
 	NodeID node;       ///< Link graph node this leg passes.
 	NodeID origin;     ///< Link graph node this path originates from.
 	uint num_children; ///< Number of child legs that have been forked from this path.
-	Path *parent;      ///< Parent leg of this one.
+
+	uintptr_t parent_storage; ///< Parent leg of this one, flag in LSB of pointer
+
+	/** Get the parent leg of this one. */
+	inline void SetParent(Path *parent) { this->parent_storage = reinterpret_cast<uintptr_t>(parent) | (this->parent_storage & 1); }
 };
 
 #endif /* LINKGRAPHJOB_H */

@@ -19,6 +19,7 @@
 #include "cheat_type.h"
 #include "genworld.h"
 #include "tree_map.h"
+#include "tunnel_map.h"
 #include "newgrf_cargo.h"
 #include "newgrf_debug.h"
 #include "newgrf_industrytiles.h"
@@ -100,7 +101,7 @@ void ResetIndustries()
  */
 IndustryType GetIndustryType(TileIndex tile)
 {
-	assert(IsTileType(tile, MP_INDUSTRY));
+	assert_tile(IsTileType(tile, MP_INDUSTRY), tile);
 
 	const Industry *ind = Industry::GetByTile(tile);
 	assert(ind != nullptr);
@@ -196,6 +197,8 @@ Industry::~Industry()
 	for (Station *st : this->stations_near) {
 		st->industries_near.erase(this);
 	}
+
+	if (_game_mode == GM_NORMAL) RegisterGameEvents(GEF_INDUSTRY_DELETE);
 }
 
 /**
@@ -314,7 +317,7 @@ static IndustryDrawTileProc * const _industry_draw_tile_procs[5] = {
 	IndustryDrawCoalPlantSparks,
 };
 
-static void DrawTile_Industry(TileInfo *ti)
+static void DrawTile_Industry(TileInfo *ti, DrawTileProcParams params)
 {
 	IndustryGfx gfx = GetIndustryGfx(ti->tile);
 	Industry *ind = Industry::GetByTile(ti->tile);
@@ -550,7 +553,7 @@ static bool TransportIndustryGoods(TileIndex tile)
 }
 
 
-static void AnimateTile_Industry(TileIndex tile)
+void AnimateTile_Industry(TileIndex tile)
 {
 	IndustryGfx gfx = GetIndustryGfx(tile);
 
@@ -561,7 +564,7 @@ static void AnimateTile_Industry(TileIndex tile)
 
 	switch (gfx) {
 	case GFX_SUGAR_MINE_SIEVE:
-		if ((_tick_counter & 1) == 0) {
+		if ((_scaled_tick_counter & 1) == 0) {
 			byte m = GetAnimationFrame(tile) + 1;
 
 			if (_settings_client.sound.ambient) {
@@ -577,12 +580,12 @@ static void AnimateTile_Industry(TileIndex tile)
 			}
 			SetAnimationFrame(tile, m);
 
-			MarkTileDirtyByTile(tile);
+			MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 		}
 		break;
 
 	case GFX_TOFFEE_QUARY:
-		if ((_tick_counter & 3) == 0) {
+		if ((_scaled_tick_counter & 3) == 0) {
 			byte m = GetAnimationFrame(tile);
 
 			if (_industry_anim_offs_toffee[m] == 0xFF && _settings_client.sound.ambient) {
@@ -595,12 +598,12 @@ static void AnimateTile_Industry(TileIndex tile)
 			}
 			SetAnimationFrame(tile, m);
 
-			MarkTileDirtyByTile(tile);
+			MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 		}
 		break;
 
 	case GFX_BUBBLE_CATCHER:
-		if ((_tick_counter & 1) == 0) {
+		if ((_scaled_tick_counter & 1) == 0) {
 			byte m = GetAnimationFrame(tile);
 
 			if (++m >= 40) {
@@ -609,26 +612,26 @@ static void AnimateTile_Industry(TileIndex tile)
 			}
 			SetAnimationFrame(tile, m);
 
-			MarkTileDirtyByTile(tile);
+			MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 		}
 		break;
 
 	/* Sparks on a coal plant */
 	case GFX_POWERPLANT_SPARKS:
-		if ((_tick_counter & 3) == 0) {
+		if ((_scaled_tick_counter & 3) == 0) {
 			byte m = GetAnimationFrame(tile);
 			if (m == 6) {
 				SetAnimationFrame(tile, 0);
 				DeleteAnimatedTile(tile);
 			} else {
 				SetAnimationFrame(tile, m + 1);
-				MarkTileDirtyByTile(tile);
+				MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 			}
 		}
 		break;
 
 	case GFX_TOY_FACTORY:
-		if ((_tick_counter & 1) == 0) {
+		if ((_scaled_tick_counter & 1) == 0) {
 			byte m = GetAnimationFrame(tile) + 1;
 
 			switch (m) {
@@ -648,7 +651,7 @@ static void AnimateTile_Industry(TileIndex tile)
 			}
 
 			SetAnimationFrame(tile, m);
-			MarkTileDirtyByTile(tile);
+			MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 		}
 		break;
 
@@ -656,19 +659,19 @@ static void AnimateTile_Industry(TileIndex tile)
 	case GFX_PLASTIC_FOUNTAIN_ANIMATED_3: case GFX_PLASTIC_FOUNTAIN_ANIMATED_4:
 	case GFX_PLASTIC_FOUNTAIN_ANIMATED_5: case GFX_PLASTIC_FOUNTAIN_ANIMATED_6:
 	case GFX_PLASTIC_FOUNTAIN_ANIMATED_7: case GFX_PLASTIC_FOUNTAIN_ANIMATED_8:
-		if ((_tick_counter & 3) == 0) {
+		if ((_scaled_tick_counter & 3) == 0) {
 			IndustryGfx gfx = GetIndustryGfx(tile);
 
 			gfx = (gfx < 155) ? gfx + 1 : 148;
 			SetIndustryGfx(tile, gfx);
-			MarkTileDirtyByTile(tile);
+			MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 		}
 		break;
 
 	case GFX_OILWELL_ANIMATED_1:
 	case GFX_OILWELL_ANIMATED_2:
 	case GFX_OILWELL_ANIMATED_3:
-		if ((_tick_counter & 7) == 0) {
+		if ((_scaled_tick_counter & 7) == 0) {
 			bool b = Chance16(1, 7);
 			IndustryGfx gfx = GetIndustryGfx(tile);
 
@@ -680,7 +683,7 @@ static void AnimateTile_Industry(TileIndex tile)
 			} else {
 				SetAnimationFrame(tile, m);
 				SetIndustryGfx(tile, gfx);
-				MarkTileDirtyByTile(tile);
+				MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 			}
 		}
 		break;
@@ -688,7 +691,7 @@ static void AnimateTile_Industry(TileIndex tile)
 	case GFX_COAL_MINE_TOWER_ANIMATED:
 	case GFX_COPPER_MINE_TOWER_ANIMATED:
 	case GFX_GOLD_MINE_TOWER_ANIMATED: {
-			int state = _tick_counter & 0x7FF;
+			int state = _scaled_tick_counter & 0x7FF;
 
 			if ((state -= 0x400) < 0) return;
 
@@ -706,7 +709,7 @@ static void AnimateTile_Industry(TileIndex tile)
 				byte m = (GetAnimationFrame(tile) + 1) | 0x40;
 				if (m > 0xC2) m = 0xC0;
 				SetAnimationFrame(tile, m);
-				MarkTileDirtyByTile(tile);
+				MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 			} else if (state >= 0x200 && state < 0x3A0) {
 				int i = (state < 0x220 || state >= 0x380) ? 7 : 3;
 				if (state & i) return;
@@ -714,7 +717,7 @@ static void AnimateTile_Industry(TileIndex tile)
 				byte m = (GetAnimationFrame(tile) & 0xBF) - 1;
 				if (m < 0x80) m = 0x82;
 				SetAnimationFrame(tile, m);
-				MarkTileDirtyByTile(tile);
+				MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 			}
 			break;
 		}
@@ -744,7 +747,7 @@ static void MakeIndustryTileBigger(TileIndex tile)
 	StartStopIndustryTileAnimation(tile, IAT_CONSTRUCTION_STATE_CHANGE);
 	if (stage == INDUSTRY_COMPLETED) SetIndustryCompleted(tile);
 
-	MarkTileDirtyByTile(tile);
+	MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 
 	if (!IsIndustryCompleted(tile)) return;
 
@@ -838,7 +841,7 @@ static void TileLoop_Industry(TileIndex tile)
 			ResetIndustryConstructionStage(tile);
 			SetIndustryCompleted(tile);
 			SetIndustryGfx(tile, newgfx);
-			MarkTileDirtyByTile(tile);
+			MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 			return;
 		}
 	}
@@ -849,7 +852,7 @@ static void TileLoop_Industry(TileIndex tile)
 	if (newgfx != INDUSTRYTILE_NOANIM) {
 		ResetIndustryConstructionStage(tile);
 		SetIndustryGfx(tile, newgfx);
-		MarkTileDirtyByTile(tile);
+		MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 		return;
 	}
 
@@ -858,7 +861,7 @@ static void TileLoop_Industry(TileIndex tile)
 	case GFX_COAL_MINE_TOWER_NOT_ANIMATED:
 	case GFX_COPPER_MINE_TOWER_NOT_ANIMATED:
 	case GFX_GOLD_MINE_TOWER_NOT_ANIMATED:
-		if (!(_tick_counter & 0x400) && Chance16(1, 2)) {
+		if (!(_scaled_tick_counter & 0x400) && Chance16(1, 2)) {
 			switch (gfx) {
 				case GFX_COAL_MINE_TOWER_NOT_ANIMATED:   gfx = GFX_COAL_MINE_TOWER_ANIMATED;   break;
 				case GFX_COPPER_MINE_TOWER_NOT_ANIMATED: gfx = GFX_COPPER_MINE_TOWER_ANIMATED; break;
@@ -881,7 +884,7 @@ static void TileLoop_Industry(TileIndex tile)
 	case GFX_COAL_MINE_TOWER_ANIMATED:
 	case GFX_COPPER_MINE_TOWER_ANIMATED:
 	case GFX_GOLD_MINE_TOWER_ANIMATED:
-		if (!(_tick_counter & 0x400)) {
+		if (!(_scaled_tick_counter & 0x400)) {
 			switch (gfx) {
 				case GFX_COAL_MINE_TOWER_ANIMATED:   gfx = GFX_COAL_MINE_TOWER_NOT_ANIMATED;   break;
 				case GFX_COPPER_MINE_TOWER_ANIMATED: gfx = GFX_COPPER_MINE_TOWER_NOT_ANIMATED; break;
@@ -1052,7 +1055,7 @@ static void PlantFarmField(TileIndex tile, IndustryID industry)
 		if (IsSuitableForFarmField(cur_tile, true)) {
 			MakeField(cur_tile, field_type, industry);
 			SetClearCounter(cur_tile, counter);
-			MarkTileDirtyByTile(cur_tile);
+			MarkTileDirtyByTile(cur_tile, ZOOM_LVL_DRAW_MAP);
 		}
 	}
 
@@ -1482,7 +1485,9 @@ static CommandCost CheckIfIndustryTilesAreFree(TileIndex tile, const IndustryTil
 				if (ret.Failed()) return ret;
 			} else {
 				/* Clear the tiles, but do not affect town ratings */
-				CommandCost ret = DoCommand(cur_tile, 0, 0, DC_AUTO | DC_NO_TEST_TOWN_RATING | DC_NO_MODIFY_TOWN_RATING, CMD_LANDSCAPE_CLEAR);
+				DoCommandFlag flags = DC_AUTO | DC_NO_TEST_TOWN_RATING | DC_NO_MODIFY_TOWN_RATING;
+				if ((ind_behav & INDUSTRYBEH_BUILT_ONWATER) && IsWaterTile(cur_tile)) flags |= DC_ALLOW_REMOVE_WATER;
+				CommandCost ret = DoCommand(cur_tile, 0, 0, flags, CMD_LANDSCAPE_CLEAR);
 
 				if (ret.Failed()) return ret;
 			}
@@ -1516,6 +1521,11 @@ static CommandCost CheckIfIndustryIsAllowed(TileIndex tile, int type, const Town
 	if ((GetIndustrySpec(type)->behaviour & INDUSTRYBEH_ONLY_NEARTOWN) && DistanceMax(t->xy, tile) > 9) {
 		return_cmd_error(STR_ERROR_CAN_ONLY_BE_BUILT_NEAR_TOWN_CENTER);
 	}
+
+	if (type == IT_OIL_RIG &&
+			(IsTunnelInWay(tile, 0) ||
+			IsTunnelInWay(tile + TileDiffXY(0, 1), 0) ||
+			IsTunnelInWay(tile + TileDiffXY(1, 2), 0))) return_cmd_error(STR_ERROR_NO_DRILLING_ABOVE_CHUNNEL);
 
 	return CommandCost();
 }
@@ -1895,6 +1905,7 @@ static void DoCreateNewIndustry(Industry *i, TileIndex tile, IndustryType type, 
 	InvalidateWindowData(WC_INDUSTRY_DIRECTORY, 0, IDIWD_FORCE_REBUILD);
 
 	if (!_generating_world) PopulateStationsNearby(i);
+	if (_game_mode == GM_NORMAL) RegisterGameEvents(GEF_INDUSTRY_CREATE);
 }
 
 /**
@@ -2525,7 +2536,7 @@ static int WhoCanServiceIndustry(Industry *ind)
 		/* Check whether it accepts the right kind of cargo */
 		bool c_accepts = false;
 		bool c_produces = false;
-		if (v->type == VEH_TRAIN && v->IsFrontEngine()) {
+		if (v->type == VEH_TRAIN && v->IsFrontEngine() && !HasBit(v->subtype, GVSF_VIRTUAL)) {
 			for (const Vehicle *u = v; u != nullptr; u = u->Next()) {
 				CanCargoServiceIndustry(u->cargo_type, ind, &c_accepts, &c_produces);
 			}

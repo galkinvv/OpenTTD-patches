@@ -22,20 +22,44 @@
  * @param v Vehicle to refresh links for.
  * @param allow_merge If the refresher is allowed to merge or extend link graphs.
  * @param is_full_loading If the vehicle is full loading.
+ * @param cargo_mask Mask of cargoes to refresh
  */
-/* static */ void LinkRefresher::Run(Vehicle *v, bool allow_merge, bool is_full_loading)
+/* static */ void LinkRefresher::Run(Vehicle *v, bool allow_merge, bool is_full_loading, CargoTypes cargo_mask)
 {
 	/* If there are no orders we can't predict anything.*/
 	if (v->orders.list == nullptr) return;
 
-	/* Make sure the first order is a useful order. */
-	const Order *first = v->orders.list->GetNextDecisionNode(v->GetOrder(v->cur_implicit_order_index), 0);
-	if (first == nullptr) return;
+	CargoTypes have_cargo_mask = v->GetLastLoadingStationValidCargoMask();
 
-	HopSet seen_hops;
-	LinkRefresher refresher(v, &seen_hops, allow_merge, is_full_loading);
+	/* Scan orders for cargo-specific load/unload, and run LinkRefresher separately for each set of cargoes where they differ. */
+	while (cargo_mask != 0) {
+		CargoTypes iter_cargo_mask = cargo_mask;
+		for (const Order *o = v->orders.list->GetFirstOrder(); o != nullptr; o = o->next) {
+			if (o->IsType(OT_GOTO_STATION) || o->IsType(OT_IMPLICIT)) {
+				if (o->GetUnloadType() == OUFB_CARGO_TYPE_UNLOAD) {
+					CargoMaskValueFilter<uint>(iter_cargo_mask, [&](CargoID cargo) -> uint {
+						return o->GetCargoUnloadType(cargo) & (OUFB_TRANSFER | OUFB_UNLOAD | OUFB_NO_UNLOAD);
+					});
+				}
+				if (o->GetLoadType() == OLFB_CARGO_TYPE_LOAD) {
+					CargoMaskValueFilter<uint>(iter_cargo_mask, [&](CargoID cargo) -> uint {
+						return o->GetCargoLoadType(cargo) & (OLFB_NO_LOAD);
+					});
+				}
+			}
+		}
 
-	refresher.RefreshLinks(first, first, v->last_loading_station != INVALID_STATION ? 1 << HAS_CARGO : 0);
+		/* Make sure the first order is a useful order. */
+		const Order *first = v->orders.list->GetNextDecisionNode(v->GetOrder(v->cur_implicit_order_index), 0, iter_cargo_mask);
+		if (first != nullptr) {
+			HopSet seen_hops;
+			LinkRefresher refresher(v, &seen_hops, allow_merge, is_full_loading, iter_cargo_mask);
+
+			refresher.RefreshLinks(first, first, (iter_cargo_mask & have_cargo_mask) ? 1 << HAS_CARGO : 0);
+		}
+
+		cargo_mask &= ~iter_cargo_mask;
+	}
 }
 
 /**
@@ -66,9 +90,9 @@ bool LinkRefresher::Hop::operator<(const Hop &other) const
  * @param allow_merge If the refresher is allowed to merge or extend link graphs.
  * @param is_full_loading If the vehicle is full loading.
  */
-LinkRefresher::LinkRefresher(Vehicle *vehicle, HopSet *seen_hops, bool allow_merge, bool is_full_loading) :
+LinkRefresher::LinkRefresher(Vehicle *vehicle, HopSet *seen_hops, bool allow_merge, bool is_full_loading, CargoTypes cargo_mask) :
 	vehicle(vehicle), seen_hops(seen_hops), cargo(CT_INVALID), allow_merge(allow_merge),
-	is_full_loading(is_full_loading)
+	is_full_loading(is_full_loading), cargo_mask(cargo_mask)
 {
 	memset(this->capacities, 0, sizeof(this->capacities));
 
@@ -173,9 +197,19 @@ const Order *LinkRefresher::PredictNextOrder(const Order *cur, const Order *next
 		SetBit(flags, USE_NEXT);
 
 		if (next->IsType(OT_CONDITIONAL)) {
+			if (next->GetConditionVariable() == OCV_UNCONDITIONALLY) {
+				CargoTypes this_cargo_mask = this->cargo_mask;
+				next = this->vehicle->orders.list->GetNextDecisionNode(
+						this->vehicle->orders.list->GetOrderAt(next->GetConditionSkipToOrder()),
+						num_hops++, this_cargo_mask);
+				assert(this_cargo_mask == this->cargo_mask);
+				continue;
+			}
+			CargoTypes this_cargo_mask = this->cargo_mask;
 			const Order *skip_to = this->vehicle->orders.list->GetNextDecisionNode(
-					this->vehicle->orders.list->GetOrderAt(next->GetConditionSkipToOrder()), num_hops);
-			if (skip_to != nullptr && num_hops < this->vehicle->orders.list->GetNumOrders()) {
+					this->vehicle->orders.list->GetOrderAt(next->GetConditionSkipToOrder()), num_hops, this_cargo_mask);
+			assert(this_cargo_mask == this->cargo_mask);
+			if (skip_to != nullptr && num_hops < this->vehicle->orders.list->GetNumOrders() && skip_to != next) {
 				/* Make copies of capacity tracking lists. There is potential
 				 * for optimization here: If the vehicle never refits we don't
 				 * need to copy anything. Also, if we've seen the branched link
@@ -187,8 +221,10 @@ const Order *LinkRefresher::PredictNextOrder(const Order *cur, const Order *next
 
 		/* Reassign next with the following stop. This can be a station or a
 		 * depot.*/
+		CargoTypes this_cargo_mask = this->cargo_mask;
 		next = this->vehicle->orders.list->GetNextDecisionNode(
-				this->vehicle->orders.list->GetNext(next), num_hops++);
+				this->vehicle->orders.list->GetNext(next), num_hops++, this_cargo_mask);
+		assert(this_cargo_mask == this->cargo_mask);
 	}
 	return next;
 }
@@ -206,6 +242,8 @@ void LinkRefresher::RefreshStats(const Order *cur, const Order *next)
 		for (CargoID c = 0; c < NUM_CARGO; c++) {
 			/* Refresh the link and give it a minimum capacity. */
 
+			if (!HasBit(this->cargo_mask, c)) continue;
+
 			uint cargo_quantity = this->capacities[c];
 			if (cargo_quantity == 0) continue;
 
@@ -216,7 +254,7 @@ void LinkRefresher::RefreshStats(const Order *cur, const Order *next)
 			}
 
 			/* A link is at least partly restricted if a vehicle can't load at its source. */
-			EdgeUpdateMode restricted_mode = (cur->GetLoadType() & OLFB_NO_LOAD) == 0 ?
+			EdgeUpdateMode restricted_mode = (cur->GetCargoLoadType(c) & OLFB_NO_LOAD) == 0 ?
 						EUM_UNRESTRICTED : EUM_RESTRICTED;
 
 			/* If the vehicle is currently full loading, increase the capacities at the station
@@ -307,7 +345,7 @@ void LinkRefresher::RefreshLinks(const Order *cur, const Order *next, uint8 flag
 		}
 
 		if (cur->IsType(OT_GOTO_STATION) || cur->IsType(OT_IMPLICIT)) {
-			if (cur->CanLeaveWithCargo(HasBit(flags, HAS_CARGO))) {
+			if (cur->CanLeaveWithCargo(HasBit(flags, HAS_CARGO), FindFirstBit(this->cargo_mask))) {
 				SetBit(flags, HAS_CARGO);
 				this->RefreshStats(cur, next);
 			} else {

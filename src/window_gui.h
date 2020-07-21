@@ -143,9 +143,21 @@ void DrawFrameRect(int left, int top, int right, int bottom, Colours colour, Fra
 void DrawCaption(const Rect &r, Colours colour, Owner owner, StringID str);
 
 /* window.cpp */
-extern Window *_z_front_window;
-extern Window *_z_back_window;
+extern WindowBase *_z_front_window;
+extern WindowBase *_z_back_window;
 extern Window *_focused_window;
+
+inline uint64 GetWindowUpdateNumber()
+{
+	extern uint64 _window_update_number;
+	return _window_update_number;
+}
+
+inline void IncrementWindowUpdateNumber()
+{
+	extern uint64 _window_update_number;
+	_window_update_number++;
+}
 
 
 /** How do we the window to be placed? */
@@ -163,7 +175,7 @@ struct HotkeyList;
 /**
  * High level window description
  */
-struct WindowDesc : ZeroedMemoryAllocator {
+struct WindowDesc {
 
 	WindowDesc(WindowPosition default_pos, const char *ini_key, int16 def_width_trad, int16 def_height_trad,
 			WindowClass window_class, WindowClass parent_class, uint32 flags,
@@ -228,7 +240,7 @@ enum SortButtonState {
 /**
  * Window flags.
  */
-enum WindowFlags {
+enum WindowFlags : uint16 {
 	WF_TIMEOUT           = 1 <<  0, ///< Window timeout counter.
 
 	WF_DRAGGING          = 1 <<  3, ///< Window is being dragged.
@@ -240,6 +252,9 @@ enum WindowFlags {
 	WF_WHITE_BORDER      = 1 <<  8, ///< Window white border counter bit mask.
 	WF_HIGHLIGHTED       = 1 <<  9, ///< Window has a widget that has a highlight.
 	WF_CENTERED          = 1 << 10, ///< Window is centered and shall stay centered after ReInit.
+	WF_DIRTY             = 1 << 11, ///< Whole window is dirty, and requires repainting.
+	WF_WIDGETS_DIRTY     = 1 << 12, ///< One or more widgets are dirty, and require repainting.
+	WF_DRAG_DIRTIED      = 1 << 13, ///< The window has already been marked dirty as blocks as part of the current drag operation
 };
 DECLARE_ENUM_AS_BIT_SET(WindowFlags)
 
@@ -268,12 +283,52 @@ enum TooltipCloseCondition {
 	TCC_RIGHT_CLICK,
 	TCC_HOVER,
 	TCC_NONE,
+	TCC_HOVER_VIEWPORT,
+	TCC_NEXT_LOOP,
+};
+
+struct WindowBase {
+	WindowBase *z_front;             ///< The window in front of us in z-order.
+	WindowBase *z_back;              ///< The window behind us in z-order.
+	WindowClass window_class;        ///< Window class
+
+	virtual ~WindowBase() {}
+
+	/**
+	 * Memory allocator for a single class instance.
+	 * @param size the amount of bytes to allocate.
+	 * @return the given amounts of bytes zeroed.
+	 */
+	inline void *operator new(size_t size) { return CallocT<byte>(size); }
+
+protected:
+	WindowBase() {}
+
+private:
+	/**
+	 * Memory allocator for an array of class instances.
+	 * @param size the amount of bytes to allocate.
+	 * @return the given amounts of bytes zeroed.
+	 */
+	inline void *operator new[](size_t size) { NOT_REACHED(); }
+
+	/**
+	 * Memory release for a single class instance.
+	 * @param ptr  the memory to free.
+	 */
+	inline void operator delete(void *ptr) { NOT_REACHED(); }
+
+	/**
+	 * Memory release for an array of class instances.
+	 * @param ptr  the memory to free.
+	 */
+	inline void operator delete[](void *ptr) { NOT_REACHED(); }
 };
 
 /**
  * Data structure for an opened window
  */
-struct Window : ZeroedMemoryAllocator {
+struct Window : WindowBase {
 protected:
 	void InitializeData(WindowNumber window_number);
 	void InitializePositionSize(int x, int y, int min_width, int min_height);
@@ -308,7 +363,6 @@ public:
 
 	WindowDesc *window_desc;    ///< Window description
 	WindowFlags flags;          ///< Window flags
-	WindowClass window_class;   ///< Window class
 	WindowNumber window_number; ///< Window number within the window class
 
 	uint8 timeout_timer;      ///< Timer value of the WF_TIMEOUT for flags.
@@ -324,7 +378,8 @@ public:
 	Owner owner;        ///< The owner of the content shown in this window. Company colour is acquired from this variable.
 
 	ViewportData *viewport;          ///< Pointer to viewport data, if present.
-	const NWidgetCore *nested_focus; ///< Currently focused nested widget, or \c nullptr if no nested widget has focus.
+	NWidgetViewport *viewport_widget; ///< Pointer to viewport widget, if present.
+	NWidgetCore *nested_focus;       ///< Currently focused nested widget, or \c nullptr if no nested widget has focus.
 	SmallMap<int, QueryString*> querystrings; ///< QueryString associated to WWT_EDITBOX widgets.
 	NWidgetBase *nested_root;        ///< Root of the nested tree.
 	NWidgetBase **nested_array;      ///< Array of pointers into the tree. Do not access directly, use #Window::GetWidget() instead.
@@ -335,8 +390,6 @@ public:
 	int mouse_capture_widget;        ///< Widgetindex of current mouse capture widget (e.g. dragged scrollbar). -1 if no widget has mouse capture.
 
 	Window *parent;                  ///< Parent window.
-	Window *z_front;                 ///< The window in front of us in z-order.
-	Window *z_back;                  ///< The window behind us in z-order.
 
 	template <class NWID>
 	inline const NWID *GetWidget(uint widnum) const;
@@ -508,7 +561,7 @@ public:
 	void RaiseButtons(bool autoraise = false);
 	void CDECL SetWidgetsDisabledState(bool disab_stat, int widgets, ...);
 	void CDECL SetWidgetsLoweredState(bool lowered_stat, int widgets, ...);
-	void SetWidgetDirty(byte widget_index) const;
+	void SetWidgetDirty(byte widget_index);
 
 	void DrawWidgets() const;
 	void DrawViewport() const;
@@ -517,7 +570,8 @@ public:
 
 	void DeleteChildWindows(WindowClass wc = WC_INVALID) const;
 
-	void SetDirty() const;
+	void SetDirty();
+	void SetDirtyAsBlocks();
 	void ReInit(int rx = 0, int ry = 0);
 
 	/** Is window shaded currently? */
@@ -590,9 +644,9 @@ public:
 	 */
 	virtual void SetStringParameters(int widget) const {}
 
-	virtual void OnFocus();
+	virtual void OnFocus(Window *previously_focused_window);
 
-	virtual void OnFocusLost();
+	virtual void OnFocusLost(Window *newly_focused_window);
 
 	/**
 	 * A key has been pressed.
@@ -612,6 +666,15 @@ public:
 	 */
 	virtual EventState OnCTRLStateChange() { return ES_NOT_HANDLED; }
 
+	/**
+	 * The state of the control key has changed, this is sent even if an OnCTRLStateChange handler has return ES_HANDLED
+	 */
+	virtual void OnCTRLStateChangeAlways() {}
+
+	/**
+	 * The state of the shift key has changed
+	 */
+	virtual void OnShiftStateChange() {}
 
 	/**
 	 * A click with the left mouse button has been made on the window.
@@ -885,9 +948,37 @@ void GuiShowTooltips(Window *parent, StringID str, uint paramcount = 0, const ui
 /* widget.cpp */
 int GetWidgetFromPos(const Window *w, int x, int y);
 
+inline const Window *FromBaseWindowFront(const WindowBase *w)
+{
+	while (w) {
+		if (w->window_class != WC_INVALID) return (const Window *) w;
+		w = w->z_front;
+	}
+	return nullptr;
+}
+
+inline Window *FromBaseWindowFront(WindowBase *w)
+{
+	return const_cast<Window *>(FromBaseWindowFront(const_cast<const WindowBase *>(w)));
+}
+
+inline const Window *FromBaseWindowBack(const WindowBase *w)
+{
+	while (w) {
+		if (w->window_class != WC_INVALID) return (const Window *) w;
+		w = w->z_back;
+	}
+	return nullptr;
+}
+
+inline Window *FromBaseWindowBack(WindowBase *w)
+{
+	return const_cast<Window *>(FromBaseWindowBack(const_cast<const WindowBase *>(w)));
+}
+
 /** Iterate over all windows */
-#define FOR_ALL_WINDOWS_FROM_BACK_FROM(w, start)  for (w = start; w != nullptr; w = w->z_front) if (w->window_class != WC_INVALID)
-#define FOR_ALL_WINDOWS_FROM_FRONT_FROM(w, start) for (w = start; w != nullptr; w = w->z_back) if (w->window_class != WC_INVALID)
+#define FOR_ALL_WINDOWS_FROM_BACK_FROM(w, start)  for (w = FromBaseWindowFront(start); w != nullptr; w = FromBaseWindowFront(w->z_front))
+#define FOR_ALL_WINDOWS_FROM_FRONT_FROM(w, start) for (w = FromBaseWindowBack(start); w != nullptr; w = FromBaseWindowBack(w->z_back))
 #define FOR_ALL_WINDOWS_FROM_BACK(w)  FOR_ALL_WINDOWS_FROM_BACK_FROM(w, _z_back_window)
 #define FOR_ALL_WINDOWS_FROM_FRONT(w) FOR_ALL_WINDOWS_FROM_FRONT_FROM(w, _z_front_window)
 
@@ -897,7 +988,8 @@ extern int _scrollbar_start_pos;
 extern int _scrollbar_size;
 extern byte _scroller_click_timeout;
 
-extern bool _scrolling_viewport;
+extern Window *_scrolling_viewport;
+extern Rect _scrolling_viewport_bound;
 extern bool _mouse_hovering;
 
 /** Mouse modes. */
@@ -912,5 +1004,27 @@ extern SpecialMouseMode _special_mouse_mode;
 void SetFocusedWindow(Window *w);
 
 void ScrollbarClickHandler(Window *w, NWidgetCore *nw, int x, int y);
+
+/**
+ * Returns whether a window may be shown or not.
+ * @param w The window to consider.
+ * @return True iff it may be shown, otherwise false.
+ */
+inline bool MayBeShown(const Window *w)
+{
+	/* If we're not modal, everything is okay. */
+	extern bool _in_modal_progress;
+	if (likely(!_in_modal_progress)) return true;
+
+	switch (w->window_class) {
+		case WC_MAIN_WINDOW:    ///< The background, i.e. the game.
+		case WC_MODAL_PROGRESS: ///< The actual progress window.
+		case WC_CONFIRM_POPUP_QUERY: ///< The abort window.
+			return true;
+
+		default:
+			return false;
+	}
+}
 
 #endif /* WINDOW_GUI_H */

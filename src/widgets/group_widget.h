@@ -15,6 +15,8 @@ enum GroupListWidgets {
 	WID_GL_CAPTION,                  ///< Caption of the window.
 	WID_GL_SORT_BY_ORDER,            ///< Sort order.
 	WID_GL_SORT_BY_DROPDOWN,         ///< Sort by dropdown list.
+	WID_GL_FILTER_BY_CARGO,          ///< Filter vehicle by cargo type.
+	WID_GL_FILTER_BY_CARGO_SEL,      ///< Filter vehicle by cargo type panel selector.
 	WID_GL_LIST_VEHICLE,             ///< List of the vehicles.
 	WID_GL_LIST_VEHICLE_SCROLLBAR,   ///< Scrollbar for the list.
 	WID_GL_AVAILABLE_VEHICLES,       ///< Available vehicles.
@@ -30,6 +32,8 @@ enum GroupListWidgets {
 	WID_GL_DELETE_GROUP,             ///< Delete group button.
 	WID_GL_RENAME_GROUP,             ///< Rename group button.
 	WID_GL_LIVERY_GROUP,             ///< Group livery button.
+	WID_GL_COLLAPSE_ALL_GROUPS,      ///< Collapse all groups button.
+	WID_GL_EXPAND_ALL_GROUPS,        ///< Expand all groups button.
 	WID_GL_REPLACE_PROTECTION,       ///< Replace protection button.
 	WID_GL_INFO,                     ///< Group info.
 };

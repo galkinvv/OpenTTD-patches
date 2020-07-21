@@ -14,6 +14,7 @@
 #include "vehicle_gui.h"
 #include "landscape.h"
 #include "window_func.h"
+#include "tunnel_map.h"
 #include "widgets/vehicle_widget.h"
 
 /** What is the status of our acceleration? */
@@ -52,6 +53,7 @@ enum GroundVehicleFlags {
 	GVF_GOINGUP_BIT              = 0,  ///< Vehicle is currently going uphill. (Cached track information for acceleration)
 	GVF_GOINGDOWN_BIT            = 1,  ///< Vehicle is currently going downhill. (Cached track information for acceleration)
 	GVF_SUPPRESS_IMPLICIT_ORDERS = 2,  ///< Disable insertion and removal of automatic orders until the vehicle completes the real order.
+	GVF_CHUNNEL_BIT              = 3,  ///< Vehicle may currently be in a chunnel. (Cached track information for inclination changes)
 };
 
 /**
@@ -89,8 +91,11 @@ struct GroundVehicle : public SpecializedVehicle<T, Type> {
 
 	void PowerChanged();
 	void CargoChanged();
-	int GetAcceleration() const;
 	bool IsChainInDepot() const override;
+
+	void CalculatePower(uint32& power, uint32& max_te, bool breakdowns) const;
+
+	int GetAcceleration();
 
 	/**
 	 * Common code executed for crashed ground vehicles
@@ -111,9 +116,12 @@ struct GroundVehicle : public SpecializedVehicle<T, Type> {
 	 * Calculates the total slope resistance for this vehicle.
 	 * @return Slope resistance.
 	 */
-	inline int64 GetSlopeResistance() const
+	inline int64 GetSlopeResistance()
 	{
+		if (likely(HasBit(this->vcache.cached_veh_flags, VCF_GV_ZERO_SLOPE_RESIST))) return 0;
+
 		int64 incl = 0;
+		bool zero_slope_resist = true;
 
 		for (const T *u = T::From(this); u != nullptr; u = u->Next()) {
 			if (HasBit(u->gv_flags, GVF_GOINGUP_BIT)) {
@@ -121,7 +129,9 @@ struct GroundVehicle : public SpecializedVehicle<T, Type> {
 			} else if (HasBit(u->gv_flags, GVF_GOINGDOWN_BIT)) {
 				incl -= u->gcache.cached_slope_resistance;
 			}
+			if (incl != 0) zero_slope_resist = false;
 		}
+		SB(this->vcache.cached_veh_flags, VCF_GV_ZERO_SLOPE_RESIST, 1, zero_slope_resist ? 1 : 0);
 
 		return incl;
 	}
@@ -147,6 +157,7 @@ struct GroundVehicle : public SpecializedVehicle<T, Type> {
 
 			if (middle_z != this->z_pos) {
 				SetBit(this->gv_flags, (middle_z > this->z_pos) ? GVF_GOINGUP_BIT : GVF_GOINGDOWN_BIT);
+				ClrBit(this->First()->vcache.cached_veh_flags, VCF_GV_ZERO_SLOPE_RESIST);
 			}
 		}
 	}
@@ -220,8 +231,16 @@ struct GroundVehicle : public SpecializedVehicle<T, Type> {
 			this->z_pos += HasBit(this->gv_flags, GVF_GOINGUP_BIT) ? d : -d;
 		}
 
+#ifdef _DEBUG
 		assert(this->z_pos == GetSlopePixelZ(this->x_pos, this->y_pos));
+#endif
+
+		if (HasBit(this->gv_flags, GVF_CHUNNEL_BIT) && !IsTunnelTile(this->tile)) {
+			ClrBit(this->gv_flags, GVF_CHUNNEL_BIT);
+		}
 	}
+
+	void UpdateZPositionInWormhole();
 
 	/**
 	 * Checks if the vehicle is in a slope and sets the required flags in that case.
@@ -229,11 +248,13 @@ struct GroundVehicle : public SpecializedVehicle<T, Type> {
 	 * @param update_delta Indicates to also update the delta.
 	 * @return Old height of the vehicle.
 	 */
-	inline int UpdateInclination(bool new_tile, bool update_delta)
+	inline int UpdateInclination(bool new_tile, bool update_delta, bool in_wormhole = false)
 	{
 		int old_z = this->z_pos;
 
-		if (new_tile) {
+		if (in_wormhole) {
+			if (HasBit(this->gv_flags, GVF_CHUNNEL_BIT)) this->UpdateZPositionInWormhole();
+		} else if (new_tile) {
 			this->UpdateZPositionAndInclination();
 		} else {
 			this->UpdateZPosition();
@@ -294,6 +315,16 @@ struct GroundVehicle : public SpecializedVehicle<T, Type> {
 	inline void ClearFreeWagon() { ClrBit(this->subtype, GVSF_FREE_WAGON); }
 
 	/**
+	 * Set a vehicle as a virtual vehicle.
+	 */
+	inline void SetVirtual() { SetBit(this->subtype, GVSF_VIRTUAL); }
+
+	/**
+	 * Clear a vehicle from being a virtual vehicle.
+	 */
+	inline void ClearVirtual() { ClrBit(this->subtype, GVSF_VIRTUAL); }
+
+	/**
 	 * Set a vehicle as a multiheaded engine.
 	 */
 	inline void SetMultiheaded() { SetBit(this->subtype, GVSF_MULTIHEADED); }
@@ -328,10 +359,34 @@ struct GroundVehicle : public SpecializedVehicle<T, Type> {
 	inline bool IsMultiheaded() const { return HasBit(this->subtype, GVSF_MULTIHEADED); }
 
 	/**
+	* Tell if we are dealing with a virtual vehicle (used for templates).
+	* @return True if the vehicle is a virtual vehicle.
+	*/
+	inline bool IsVirtual() const { return HasBit(this->subtype, GVSF_VIRTUAL); }
+
+	/**
 	 * Tell if we are dealing with the rear end of a multiheaded engine.
 	 * @return True if the engine is the rear part of a dualheaded engine.
 	 */
 	inline bool IsRearDualheaded() const { return this->IsMultiheaded() && !this->IsEngine(); }
+
+	/**
+	 * Check if the vehicle is a front engine.
+	 * @return Returns true if the vehicle is a front engine.
+	 */
+	inline bool IsFrontEngine() const
+	{
+		return HasBit(this->subtype, GVSF_FRONT);
+	}
+
+	/**
+	 * Check if the vehicle is an articulated part of an engine.
+	 * @return Returns true if the vehicle is an articulated part.
+	 */
+	inline bool IsArticulatedPart() const
+	{
+		return HasBit(this->subtype, GVSF_ARTICULATED_PART);
+	}
 
 	/**
 	 * Update the GUI variant of the current speed of the vehicle.
@@ -365,9 +420,26 @@ protected:
 		uint spd = this->subspeed + accel;
 		this->subspeed = (byte)spd;
 
+		int tempmax = max_speed;
+
 		/* When we are going faster than the maximum speed, reduce the speed
 		 * somewhat gradually. But never lower than the maximum speed. */
-		int tempmax = max_speed;
+		if (this->breakdown_ctr == 1) {
+			if (this->breakdown_type == BREAKDOWN_LOW_POWER) {
+				if ((this->tick_counter & 0x7) == 0 && _settings_game.vehicle.train_acceleration_model == AM_ORIGINAL) {
+					if (this->cur_speed > (this->breakdown_severity * max_speed) >> 8) {
+						tempmax = this->cur_speed - (this->cur_speed / 10) - 1;
+					} else {
+						tempmax = (this->breakdown_severity * max_speed) >> 8;
+					}
+				}
+			} else if (this->breakdown_type == BREAKDOWN_LOW_SPEED) {
+				tempmax = min(max_speed, this->breakdown_severity);
+			} else {
+				tempmax = this->cur_speed;
+			}
+		}
+
 		if (this->cur_speed > max_speed) {
 			tempmax = max(this->cur_speed - (this->cur_speed / 10) - 1, max_speed);
 		}

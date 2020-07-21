@@ -401,7 +401,8 @@ STR_OSK_KEYBOARD_LAYOUT_CAPS                                    :~!@#$%^&*()_+|Q
 STR_MEASURE_LENGTH                                              :{BLACK}Длина: {NUM}
 STR_MEASURE_AREA                                                :{BLACK}Площадь: {NUM} × {NUM}
 STR_MEASURE_LENGTH_HEIGHTDIFF                                   :{BLACK}Длина: {NUM}{}Разница высот: {HEIGHT}
-STR_MEASURE_AREA_HEIGHTDIFF                                     :{BLACK}Площадь: {NUM} × {NUM}{}Разница высот: {HEIGHT}
+STR_MEASURE_AREA_HEIGHTDIFF                                     :{BLACK}Площадь: {NUM} x {NUM}{}Разница высот: {HEIGHT}
+STR_MEASURE_DIST_HEIGHTDIFF                                     :{BLACK}Расстояние «Манхэттэн»: {NUM}{}Расстояние по прямой: {NUM}{}Расстояние от ближайшего края: {NUM}{}Высота над уровнем моря: {HEIGHT}{}Разница высот: {HEIGHT}
 
 
 # These are used in buttons
@@ -1713,6 +1714,8 @@ STR_CONFIG_SETTING_MIN_YEARS_FOR_SHARES                         :Мин. воз�
 STR_CONFIG_SETTING_MIN_YEARS_FOR_SHARES_HELPTEXT                :Минимальный возраст, которого должна достичь компания для начала выпуска акций, которыми смогут торговать другие игроки.
 STR_CONFIG_SETTING_FEEDER_PAYMENT_SHARE                         :Процент дохода, начисляемый при частичной перевозке: {STRING}
 STR_CONFIG_SETTING_FEEDER_PAYMENT_SHARE_HELPTEXT                :Процент прибыли, начисляемый транспорту за частичную перевозку груза.
+STR_CONFIG_SETTING_SIMULATE_SIGNALS                             :Симуляция светофоров в туннелях и на мостах каждые: {STRING}
+STR_CONFIG_SETTING_SIMULATE_SIGNALS_VALUE                       :{COMMA} клет{P ку ки ок}
 STR_CONFIG_SETTING_DRAG_SIGNALS_DENSITY                         :При перетаскивании ставить сигналы каждые: {STRING}
 STR_CONFIG_SETTING_DRAG_SIGNALS_DENSITY_HELPTEXT                :Настройка периодичности расстановки сигналов методом перетаскивания. Сигналы будут устанавливаться до первого встреченного препятствия (пересечения или другого сигнала).
 STR_CONFIG_SETTING_DRAG_SIGNALS_DENSITY_VALUE                   :{COMMA} клет{P ку ки ок}
@@ -2266,7 +2269,6 @@ STR_NETWORK_COMPANY_LIST_NEW_COMPANY                            :Новая ко
 # Network client list
 STR_NETWORK_CLIENTLIST_KICK                                     :Отключить
 STR_NETWORK_CLIENTLIST_BAN                                      :Бан
-STR_NETWORK_CLIENTLIST_GIVE_MONEY                               :Передать деньги
 STR_NETWORK_CLIENTLIST_SPEAK_TO_ALL                             :Сказать всем
 STR_NETWORK_CLIENTLIST_SPEAK_TO_COMPANY                         :Говорить с компанией
 STR_NETWORK_CLIENTLIST_SPEAK_TO_CLIENT                          :Личное сообщение
@@ -2274,8 +2276,6 @@ STR_NETWORK_CLIENTLIST_SPEAK_TO_CLIENT                          :Личное с
 STR_NETWORK_SERVER                                              :Сервер
 STR_NETWORK_CLIENT                                              :Клиент
 STR_NETWORK_SPECTATORS                                          :Наблюдатели
-
-STR_NETWORK_GIVE_MONEY_CAPTION                                  :{WHITE}Введите сумму денег, которую вы хотите передать
 
 # Network set password
 STR_COMPANY_PASSWORD_CANCEL                                     :{BLACK}Не сохранять пароль
@@ -2701,6 +2701,7 @@ STR_LANDSCAPING_TOOLTIP_LOWER_A_CORNER_OF_LAND                  :{BLACK}Опус
 STR_LANDSCAPING_TOOLTIP_RAISE_A_CORNER_OF_LAND                  :{BLACK}Поднять угол земли. Перетаскивание поднимает первый выбранный угол и выравнивает выбранную область до новой высоты угла. Ctrl выбирает область по диагонали. При нажатом Shift - оценка стоимости строительства.
 STR_LANDSCAPING_LEVEL_LAND_TOOLTIP                              :{BLACK}Выровнять землю до высоты первого выбранного угла. Ctrl выбирает область по диагонали. При нажатом Shift - оценка стоимости выравнивания.
 STR_LANDSCAPING_TOOLTIP_PURCHASE_LAND                           :{BLACK}Покупка земли. При нажатом Shift - оценка стоимости покупки.
+STR_LANDSCAPING_TOOLTIP_RULER_TOOL                              :{BLACK}Виртуальная линейка для измерения расстояний и высот
 
 # Object construction window
 STR_OBJECT_BUILD_CAPTION                                        :{WHITE}Выбор объекта
@@ -2888,8 +2889,10 @@ STR_LAI_WATER_DESCRIPTION_SHIP_DEPOT                            :Верфь
 # Industries come directly from their industry names
 
 STR_LAI_TUNNEL_DESCRIPTION_RAILROAD                             :Железнодорожный туннель
+STR_LAI_TUNNEL_DESCRIPTION_RAILROAD_SIGNAL                      :Железнодорожный туннель с симуляцией светофоров
 STR_LAI_TUNNEL_DESCRIPTION_ROAD                                 :Автомобильный туннель
 
+STR_LAI_BRIDGE_DESCRIPTION_RAILROAD_SIGNAL                      :Железнодорожный мост с симуляцией светофоров
 STR_LAI_BRIDGE_DESCRIPTION_RAIL_SUSPENSION_STEEL                :Стальной висячий ж/д мост
 STR_LAI_BRIDGE_DESCRIPTION_RAIL_GIRDER_STEEL                    :Стальной балочный ж/д мост
 STR_LAI_BRIDGE_DESCRIPTION_RAIL_CANTILEVER_STEEL                :Стальной консольный ж/д мост
@@ -3541,6 +3544,7 @@ STR_COMPANY_VIEW_RELOCATE_HQ                                    :{BLACK}Пере
 STR_COMPANY_VIEW_RELOCATE_COMPANY_HEADQUARTERS                  :{BLACK}Переместить штаб-квартиру компании в другое место за 1% оценочной стоимости капитала компании. Shift+щелчок - оценка стоимости переноса.
 STR_COMPANY_VIEW_INFRASTRUCTURE_BUTTON                          :{BLACK}Подробности
 STR_COMPANY_VIEW_INFRASTRUCTURE_TOOLTIP                         :{BLACK}Посмотреть подробный состав инфраструктуры
+STR_COMPANY_VIEW_GIVE_MONEY_BUTTON                              :{BLACK}Передать деньги
 
 STR_COMPANY_VIEW_NEW_FACE_BUTTON                                :{BLACK}Внешность
 STR_COMPANY_VIEW_NEW_FACE_TOOLTIP                               :{BLACK}Изменить внешность директора
@@ -3558,6 +3562,7 @@ STR_COMPANY_VIEW_SELL_SHARE_TOOLTIP                             :{BLACK}Прод
 
 STR_COMPANY_VIEW_COMPANY_NAME_QUERY_CAPTION                     :Компания
 STR_COMPANY_VIEW_PRESIDENT_S_NAME_QUERY_CAPTION                 :Имя директора
+STR_COMPANY_VIEW_GIVE_MONEY_QUERY_CAPTION                       :Введите сумму денег, которую вы хотите передать
 
 STR_BUY_COMPANY_MESSAGE                                         :{WHITE}Мы ищем потенциального покупателя для нашей компании.{}{}Не желаете ли Вы приобрести {COMPANY} за {CURRENCY_LONG}?
 
@@ -3721,6 +3726,9 @@ STR_BUY_VEHICLE_TRAIN_LIST_TOOLTIP                              :{BLACK}Спис
 STR_BUY_VEHICLE_ROAD_VEHICLE_LIST_TOOLTIP                       :{BLACK}Список автотранспорта - щёлкните для получения информации. Ctrl+щелчок скроет/покажет выбранный автомобиль.
 STR_BUY_VEHICLE_SHIP_LIST_TOOLTIP                               :{BLACK}Список кораблей - щёлкните для получения информации. Ctrl+щелчок скроет/покажет выбранный корабль.
 STR_BUY_VEHICLE_AIRCRAFT_LIST_TOOLTIP                           :{BLACK}Список воздушных судов - щёлкните для получения информации. Ctrl+щелчок скроет/покажет ТС.
+
+STR_BUY_REFIT_VEHICLE_BUY_VEHICLE_BUTTON                        :{BLACK}Переоборудовать
+STR_BUY_REFIT_VEHICLE_BUY_VEHICLE_TOOLTIP                       :{BLACK}Переоборудовать купленное транспортное средство сразу после покупки для выделенного вида груза
 
 STR_BUY_VEHICLE_TRAIN_BUY_VEHICLE_BUTTON                        :{BLACK}Купить
 STR_BUY_VEHICLE_ROAD_VEHICLE_BUY_VEHICLE_BUTTON                 :{BLACK}Купить
@@ -4239,6 +4247,16 @@ STR_ORDER_OUT_OF_RANGE                                          :{RED} (Расс
 STR_ORDER_CONDITIONAL_UNCONDITIONAL                             :Перейти к заданию {COMMA}
 STR_ORDER_CONDITIONAL_NUM                                       :Перейти к заданию {COMMA}, если {STRING} {STRING} {COMMA}
 STR_ORDER_CONDITIONAL_TRUE_FALSE                                :Перейти к заданию {COMMA}, если {STRING} - {STRING}
+STR_CONDITIONAL_FREE_PLATFORMS                                  :Перейти к заданию {COMMA} когда след. станция {STRING} {COMMA} свободн{P ая ые ых} платформ{P а ы ""}
+STR_CONDITIONAL_PERCENT                                         :Перейти к заданию {COMMA} {COMMA} процентов времени
+STR_ORDER_CONDITIONAL_COMPARATOR_ACCEPTS                        :принимает
+STR_ORDER_CONDITIONAL_COMPARATOR_DOES_NOT_ACCEPT                :не принимает
+STR_ORDER_CONDITIONAL_COMPARATOR_HAS                            :имеет
+STR_ORDER_CONDITIONAL_COMPARATOR_HAS_NO                         :не имеет
+STR_ORDER_CONDITIONAL_COMPARATOR_HAS_LESS_THAN                  :имеет меньше чем
+STR_ORDER_CONDITIONAL_COMPARATOR_HAS_LESS_EQUALS                :имеет меньше или равно
+STR_ORDER_CONDITIONAL_COMPARATOR_HAS_MORE_THAN                  :имеет больше чем
+STR_ORDER_CONDITIONAL_COMPARATOR_HAS_MORE_EQUALS                :имеет больше или равно
 
 STR_INVALID_ORDER                                               :{RED} (Неверное место назначения)
 
@@ -5378,3 +5396,8 @@ STR_PLANE                                                       :{BLACK}{PLANE}
 STR_SHIP                                                        :{BLACK}{SHIP}
 
 STR_TOOLBAR_RAILTYPE_VELOCITY                                   :{STRING} ({VELOCITY})
+
+STR_CONFIG_SETTING_PAY_FOR_REPAIR_VEHICLE                       :Взымать плату за починку тс: {STRING}
+STR_CONFIG_SETTING_PAY_FOR_REPAIR_VEHICLE_HELPTEXT              :Если включено, в депо бужет взыматься плата за ремонт каждой поломки транспортного средства
+STR_CONFIG_SETTING_REPAIR_COST                                  :Стоимость ремонта: 1/{STRING} полной стоимости тс
+STR_CONFIG_SETTING_REPAIR_COST_HELPTEXT                         :Стоимость ремонта одной поломки транспортного средства

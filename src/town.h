@@ -15,7 +15,12 @@
 #include "subsidy_type.h"
 #include "newgrf_storage.h"
 #include "cargotype.h"
+#include "openttd.h"
+#include "table/strings.h"
+#include "company_func.h"
+#include "core/tinystring_type.hpp"
 #include <list>
+#include <memory>
 
 template <typename T>
 struct BuildingCounts {
@@ -56,7 +61,7 @@ struct Town : TownPool::PoolItem<&_town_pool> {
 	uint32 townnamegrfid;
 	uint16 townnametype;
 	uint32 townnameparts;
-	std::string name;                ///< Custom town name. If empty, the town was not renamed and uses the generated name.
+	TinyString name;                 ///< Custom town name. If empty, the town was not renamed and uses the generated name.
 	mutable std::string cached_name; ///< NOSAVE: Cache of the resolved name of the town, if not using a custom town name
 
 	byte flags;                    ///< See #TownFlags.
@@ -71,6 +76,7 @@ struct Town : TownPool::PoolItem<&_town_pool> {
 	CompanyID exclusivity;         ///< which company has exclusivity
 	uint8 exclusive_counter;       ///< months till the exclusivity expires
 	int16 ratings[MAX_COMPANIES];  ///< ratings of each company for this town
+	StringID town_label;           ///< Label dependent on _local_company rating.
 
 	TransportedCargoStat<uint32> supplied[NUM_CARGO]; ///< Cargo statistics about supplied cargo.
 	TransportedCargoStat<uint16> received[NUM_TE];    ///< Cargo statistics about received cargotypes.
@@ -107,6 +113,30 @@ struct Town : TownPool::PoolItem<&_town_pool> {
 	~Town();
 
 	void InitializeLayout(TownLayout layout);
+
+	void UpdateLabel();
+
+	/**
+	 * Returns the correct town label, based on rating.
+	 */
+	inline StringID Label() const{
+		if (!(_game_mode == GM_EDITOR) && (_local_company < MAX_COMPANIES)) {
+			return (_settings_client.gui.population_in_label ? STR_VIEWPORT_TOWN_POP_VERY_POOR_RATING : STR_VIEWPORT_TOWN_VERY_POOR_RATING) + this->town_label;
+		} else {
+			return _settings_client.gui.population_in_label ? STR_VIEWPORT_TOWN_POP : STR_VIEWPORT_TOWN;
+		}
+	}
+
+	/**
+	 * Returns the correct town small label, based on rating.
+	 */
+	inline StringID SmallLabel() const{
+		if (!(_game_mode == GM_EDITOR) && (_local_company < MAX_COMPANIES)) {
+			return STR_VIEWPORT_TOWN_TINY_VERY_POOR_RATING + this->town_label;
+		} else {
+			return STR_VIEWPORT_TOWN_TINY_WHITE;
+		}
+	}
 
 	/**
 	 * Calculate the max town noise.
@@ -199,6 +229,7 @@ void UpdateTownRadius(Town *t);
 CommandCost CheckIfAuthorityAllowsNewStation(TileIndex tile, DoCommandFlag flags);
 Town *ClosestTownFromTile(TileIndex tile, uint threshold);
 void ChangeTownRating(Town *t, int add, int max, DoCommandFlag flags);
+HouseZonesBits TryGetTownRadiusGroup(const Town *t, TileIndex tile);
 HouseZonesBits GetTownRadiusGroup(const Town *t, TileIndex tile);
 void SetTownRatingTestMode(bool mode);
 uint GetMaskOfTownActions(int *nump, CompanyID cid, const Town *t);

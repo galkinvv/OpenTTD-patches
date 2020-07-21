@@ -21,7 +21,7 @@
  */
 static inline int ScaleByZoom(int value, ZoomLevel zoom)
 {
-	return value << zoom;
+	return ((uint) value) << zoom;
 }
 
 /**
@@ -44,7 +44,7 @@ static inline int UnScaleByZoom(int value, ZoomLevel zoom)
  */
 static inline int ScaleByZoomLower(int value, ZoomLevel zoom)
 {
-	return value << zoom;
+	return ((uint) value) << zoom;
 }
 
 /**

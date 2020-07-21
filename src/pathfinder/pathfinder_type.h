@@ -42,7 +42,7 @@ static const int YAPF_INFINITE_PENALTY = 1000 * YAPF_TILE_LENGTH;
 static const int YAPF_SHIP_PATH_CACHE_LENGTH = 32;
 
 /** Maximum segments of road vehicle path cache */
-static const int YAPF_ROADVEH_PATH_CACHE_SEGMENTS = 8;
+static const int YAPF_ROADVEH_PATH_CACHE_SEGMENTS = 16;
 
 /** Distance from destination road stops to not cache any further */
 static const int YAPF_ROADVEH_PATH_CACHE_DESTINATION_LIMIT = 8;

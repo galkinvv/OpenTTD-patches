@@ -837,9 +837,7 @@ static bool LoadOldIndustry(LoadgameState *ls, int num)
 			if (i->type > 0x06) i->type++; // Printing Works were added
 			if (i->type == 0x0A) i->type = 0x12; // Iron Ore Mine has different ID
 
-			YearMonthDay ymd;
-			ConvertDateToYMD(_date, &ymd);
-			i->last_prod_year = ymd.year;
+			i->last_prod_year = _cur_date_ymd.year;
 
 			i->random_colour = RemapTTOColour(i->random_colour);
 		}
@@ -1258,6 +1256,7 @@ bool LoadOldVehicle(LoadgameState *ls, int num)
 				sprite += 1385; // rotor or disaster-related vehicles
 			}
 			v->sprite_seq.seq[0].sprite = sprite;
+			v->UpdateSpriteSeqBound();
 
 			switch (v->type) {
 				case VEH_TRAIN: {

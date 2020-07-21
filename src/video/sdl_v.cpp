@@ -25,6 +25,10 @@
 #include <SDL.h>
 #include <mutex>
 #include <condition_variable>
+#if defined(__MINGW32__)
+#include "../3rdparty/mingw-std-threads/mingw.mutex.h"
+#include "../3rdparty/mingw-std-threads/mingw.condition_variable.h"
+#endif
 #include <algorithm>
 
 #include "../safeguards.h"
@@ -725,9 +729,10 @@ void VideoDriver_SDL::MainLoop()
 			next_tick = cur_ticks + MILLISECONDS_PER_TICK;
 
 			bool old_ctrl_pressed = _ctrl_pressed;
+			bool old_shift_pressed = _shift_pressed;
 
-			_ctrl_pressed  = !!(mod & KMOD_CTRL);
-			_shift_pressed = !!(mod & KMOD_SHIFT);
+			_ctrl_pressed  = !!(mod & KMOD_CTRL) != _invert_ctrl;
+			_shift_pressed = !!(mod & KMOD_SHIFT) != _invert_shift;
 
 			/* determine which directional keys are down */
 			_dirkeys =
@@ -743,6 +748,7 @@ void VideoDriver_SDL::MainLoop()
 				(keys[SDLK_DOWN]  ? 8 : 0);
 #endif
 			if (old_ctrl_pressed != _ctrl_pressed) HandleCtrlChanged();
+			if (old_shift_pressed != _shift_pressed) HandleShiftChanged();
 
 			/* The gameloop is the part that can run asynchronously. The rest
 			 * except sleeping can't. */
@@ -751,6 +757,8 @@ void VideoDriver_SDL::MainLoop()
 			GameLoop();
 
 			if (_draw_mutex != nullptr) draw_lock.lock();
+
+			GameLoopPaletteAnimations();
 
 			UpdateWindows();
 			_local_palette = _cur_palette;

@@ -314,3 +314,44 @@ void SetCurrentThreadName(const char *threadName) {
 	MacOSSetThreadName(threadName);
 #endif /* defined(__APPLE__) */
 }
+
+int GetCurrentThreadName(char *str, const char *last)
+{
+#if !defined(NO_THREADS) && defined(__GLIBC__)
+#if __GLIBC_PREREQ(2, 12)
+	char buffer[16];
+	int result = pthread_getname_np(pthread_self(), buffer, sizeof(buffer));
+	if (result == 0) {
+		return seprintf(str, last, "%s", buffer);
+	}
+#endif
+#endif
+	return 0;
+}
+
+static pthread_t main_thread;
+
+void SetSelfAsMainThread()
+{
+#if !defined(NO_THREADS)
+	main_thread = pthread_self();
+#endif
+}
+
+bool IsMainThread()
+{
+#if !defined(NO_THREADS)
+	return main_thread == pthread_self();
+#else
+	return true;
+#endif
+}
+
+bool IsNonMainThread()
+{
+#if !defined(NO_THREADS)
+	return main_thread != pthread_self();
+#else
+	return false;
+#endif
+}

@@ -11,6 +11,7 @@
 #include "train.h"
 #include "vehiclelist.h"
 #include "group.h"
+#include "tracerestrict.h"
 
 #include "safeguards.h"
 
@@ -75,6 +76,7 @@ void BuildDepotVehicleList(VehicleType type, TileIndex tile, VehicleList *engine
 		/* General tests for all vehicle types */
 		if (v->type != type) continue;
 		if (v->tile != tile) continue;
+		if (HasBit(v->subtype, GVSF_VIRTUAL)) continue;
 
 		switch (type) {
 			case VEH_TRAIN: {
@@ -114,6 +116,14 @@ bool GenerateVehicleSortList(VehicleList *list, const VehicleListIdentifier &vli
 {
 	list->clear();
 
+	auto fill_all_vehicles = [&]() {
+		for (const Vehicle *v : Vehicle::Iterate()) {
+			if (!HasBit(v->subtype, GVSF_VIRTUAL) && v->type == vli.vtype && v->owner == vli.company && v->IsPrimaryVehicle()) {
+				list->push_back(v);
+			}
+		}
+	};
+
 	switch (vli.type) {
 		case VL_STATION_LIST:
 			for (const Vehicle *v : Vehicle::Iterate()) {
@@ -145,21 +155,18 @@ bool GenerateVehicleSortList(VehicleList *list, const VehicleListIdentifier &vli
 		case VL_GROUP_LIST:
 			if (vli.index != ALL_GROUP) {
 				for (const Vehicle *v : Vehicle::Iterate()) {
-					if (v->type == vli.vtype && v->IsPrimaryVehicle() &&
+					if (!HasBit(v->subtype, GVSF_VIRTUAL) && v->type == vli.vtype && v->IsPrimaryVehicle() &&
 							v->owner == vli.company && GroupIsInGroup(v->group_id, vli.index)) {
 						list->push_back(v);
 					}
 				}
 				break;
 			}
-			FALLTHROUGH;
+			fill_all_vehicles();
+			break;
 
 		case VL_STANDARD:
-			for (const Vehicle *v : Vehicle::Iterate()) {
-				if (v->type == vli.vtype && v->owner == vli.company && v->IsPrimaryVehicle()) {
-					list->push_back(v);
-				}
-			}
+			fill_all_vehicles();
 			break;
 
 		case VL_DEPOT_LIST:
@@ -176,6 +183,25 @@ bool GenerateVehicleSortList(VehicleList *list, const VehicleListIdentifier &vli
 				}
 			}
 			break;
+
+		case VL_SLOT_LIST: {
+			if (vli.index == ALL_TRAINS_TRACE_RESTRICT_SLOT_ID) {
+				fill_all_vehicles();
+			} else {
+				const TraceRestrictSlot *slot = TraceRestrictSlot::GetIfValid(vli.index);
+				if (slot == nullptr) return false;
+				for (VehicleID id : slot->occupants) {
+					list->push_back(Vehicle::Get(id));
+				}
+			}
+			break;
+		}
+
+		case VL_SINGLE_VEH: {
+			const Vehicle *v = Vehicle::GetIfValid(vli.index);
+			if (v != nullptr) list->push_back(v);
+			break;
+		}
 
 		default: return false;
 	}

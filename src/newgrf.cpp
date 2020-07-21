@@ -40,7 +40,6 @@
 #include "date_func.h"
 #include "string_func.h"
 #include "network/network.h"
-#include <map>
 #include "smallmap_gui.h"
 #include "genworld.h"
 #include "error.h"
@@ -51,6 +50,8 @@
 
 #include "table/strings.h"
 #include "table/build_industry.h"
+
+#include "3rdparty/cpp-btree/btree_map.h"
 
 #include "safeguards.h"
 
@@ -85,6 +86,10 @@ static const uint MAX_SPRITEGROUP = UINT8_MAX; ///< Maximum GRF-local ID for a s
 /** Hack to speedup ALL vehicles by a constant factor during loading of newgrfs.
 Useful for making game with really early and slow 1700-ths vehicles and paying for infrastructure still profitable */
 static const int MAX_SPEED_MULTIPLIER = 2;
+
+/** Base GRF ID for OpenTTD's base graphics GRFs. */
+static const uint32 OPENTTD_GRAPHICS_BASE_GRF_ID = BSWAP32(0xFF4F5400);
+
 /** Temporary data during loading of GRFs */
 struct GrfProcessingState {
 private:
@@ -95,7 +100,7 @@ private:
 	};
 
 	/** Currently referenceable spritesets */
-	std::map<uint, SpriteSet> spritesets[GSF_END];
+	btree::btree_map<uint, SpriteSet> spritesets[GSF_END];
 
 public:
 	/* Global state */
@@ -353,6 +358,7 @@ struct GRFLocation {
 	uint32 grfid;
 	uint32 nfoline;
 
+	GRFLocation() { }
 	GRFLocation(uint32 grfid, uint32 nfoline) : grfid(grfid), nfoline(nfoline) { }
 
 	bool operator<(const GRFLocation &other) const
@@ -366,8 +372,8 @@ struct GRFLocation {
 	}
 };
 
-static std::map<GRFLocation, SpriteID> _grm_sprites;
-typedef std::map<GRFLocation, byte*> GRFLineToSpriteOverride;
+static btree::btree_map<GRFLocation, SpriteID> _grm_sprites;
+typedef btree::btree_map<GRFLocation, byte*> GRFLineToSpriteOverride;
 static GRFLineToSpriteOverride _grf_line_to_action6_sprite_override;
 
 /**
@@ -380,7 +386,7 @@ static GRFLineToSpriteOverride _grf_line_to_action6_sprite_override;
  * @param severity debugging severity level, see debug.h
  * @param str message in printf() format
  */
-void CDECL grfmsg(int severity, const char *str, ...)
+void CDECL _intl_grfmsg(int severity, const char *str, ...)
 {
 	char buf[1024];
 	va_list va;
@@ -389,7 +395,7 @@ void CDECL grfmsg(int severity, const char *str, ...)
 	vseprintf(buf, lastof(buf), str, va);
 	va_end(va);
 
-	DEBUG(grf, severity, "[%s:%d] %s", _cur.grfconfig->filename, _cur.nfo_line, buf);
+	DEBUG(grf, severity, "[%s:%d] %s", _cur.grfconfig->GetDisplayPath(), _cur.nfo_line, buf);
 }
 
 /**
@@ -397,7 +403,7 @@ void CDECL grfmsg(int severity, const char *str, ...)
  * @param grfid The grfID to obtain the file for
  * @return The file.
  */
-static GRFFile *GetFileByGRFID(uint32 grfid)
+GRFFile *GetFileByGRFID(uint32 grfid)
 {
 	for (GRFFile * const file : _grf_files) {
 		if (file->grfid == grfid) return file;
@@ -995,7 +1001,37 @@ enum ChangeInfoResult {
 	CIR_INVALID_ID, ///< Attempt to modify an invalid ID
 };
 
-typedef ChangeInfoResult (*VCI_Handler)(uint engine, int numinfo, int prop, ByteReader *buf);
+typedef ChangeInfoResult (*VCI_Handler)(uint engine, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf);
+
+static ChangeInfoResult HandleAction0PropertyDefault(ByteReader *buf, int prop)
+{
+	switch (prop) {
+		case A0RPI_UNKNOWN_IGNORE:
+			buf->Skip(buf->ReadExtendedByte());
+			return CIR_SUCCESS;
+
+		case A0RPI_UNKNOWN_ERROR:
+			return CIR_DISABLED;
+
+		default:
+			return CIR_UNKNOWN;
+	}
+}
+
+static bool MappedPropertyLengthMismatch(ByteReader *buf, uint expected_size, const GRFFilePropertyRemapEntry *mapping_entry)
+{
+	uint length = buf->ReadExtendedByte();
+	if (length != expected_size) {
+		if (mapping_entry != nullptr) {
+			grfmsg(2, "Ignoring use of mapped property: %s, feature: %X, mapped to: %X, with incorrect data size: %u instead of %u",
+					mapping_entry->name, mapping_entry->feature, mapping_entry->property_id, length, expected_size);
+		}
+		buf->Skip(length);
+		return true;
+	} else {
+		return false;
+	}
+}
 
 /**
  * Define properties common to all vehicles
@@ -1004,7 +1040,7 @@ typedef ChangeInfoResult (*VCI_Handler)(uint engine, int numinfo, int prop, Byte
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult CommonVehicleChangeInfo(EngineInfo *ei, int prop, ByteReader *buf)
+static ChangeInfoResult CommonVehicleChangeInfo(EngineInfo *ei, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	switch (prop) {
 		case 0x00: // Introduction date
@@ -1033,7 +1069,7 @@ static ChangeInfoResult CommonVehicleChangeInfo(EngineInfo *ei, int prop, ByteRe
 			break;
 
 		default:
-			return CIR_UNKNOWN;
+			return HandleAction0PropertyDefault(buf, prop);
 	}
 
 	return CIR_SUCCESS;
@@ -1047,7 +1083,7 @@ static ChangeInfoResult CommonVehicleChangeInfo(EngineInfo *ei, int prop, ByteRe
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult RailVehicleChangeInfo(uint engine, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult RailVehicleChangeInfo(uint engine, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -1325,7 +1361,7 @@ static ChangeInfoResult RailVehicleChangeInfo(uint engine, int numinfo, int prop
 			}
 
 			default:
-				ret = CommonVehicleChangeInfo(ei, prop, buf);
+				ret = CommonVehicleChangeInfo(ei, prop, mapping_entry, buf);
 				break;
 		}
 	}
@@ -1341,7 +1377,7 @@ static ChangeInfoResult RailVehicleChangeInfo(uint engine, int numinfo, int prop
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult RoadVehicleChangeInfo(uint engine, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult RoadVehicleChangeInfo(uint engine, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -1519,7 +1555,7 @@ static ChangeInfoResult RoadVehicleChangeInfo(uint engine, int numinfo, int prop
 			}
 
 			default:
-				ret = CommonVehicleChangeInfo(ei, prop, buf);
+				ret = CommonVehicleChangeInfo(ei, prop, mapping_entry, buf);
 				break;
 		}
 	}
@@ -1535,7 +1571,7 @@ static ChangeInfoResult RoadVehicleChangeInfo(uint engine, int numinfo, int prop
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult ShipVehicleChangeInfo(uint engine, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult ShipVehicleChangeInfo(uint engine, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -1691,7 +1727,7 @@ static ChangeInfoResult ShipVehicleChangeInfo(uint engine, int numinfo, int prop
 			}
 
 			default:
-				ret = CommonVehicleChangeInfo(ei, prop, buf);
+				ret = CommonVehicleChangeInfo(ei, prop, mapping_entry, buf);
 				break;
 		}
 	}
@@ -1707,7 +1743,7 @@ static ChangeInfoResult ShipVehicleChangeInfo(uint engine, int numinfo, int prop
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult AircraftVehicleChangeInfo(uint engine, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult AircraftVehicleChangeInfo(uint engine, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -1845,7 +1881,7 @@ static ChangeInfoResult AircraftVehicleChangeInfo(uint engine, int numinfo, int 
 				break;
 
 			default:
-				ret = CommonVehicleChangeInfo(ei, prop, buf);
+				ret = CommonVehicleChangeInfo(ei, prop, mapping_entry, buf);
 				break;
 		}
 	}
@@ -1861,7 +1897,7 @@ static ChangeInfoResult AircraftVehicleChangeInfo(uint engine, int numinfo, int 
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult StationChangeInfo(uint stid, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult StationChangeInfo(uint stid, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -1904,7 +1940,7 @@ static ChangeInfoResult StationChangeInfo(uint stid, int numinfo, int prop, Byte
 					NewGRFSpriteLayout *dts = &statspec->renderdata[t];
 					dts->consistent_max_offset = UINT16_MAX; // Spritesets are unknown, so no limit.
 
-					if (buf->HasData(4) && *(uint32*)buf->Data() == 0) {
+					if (buf->HasData(4) && *(unaligned_uint32*)buf->Data() == 0) {
 						buf->Skip(4);
 						extern const DrawTileSprites _station_display_datas_rail[8];
 						dts->Clone(&_station_display_datas_rail[t % 8]);
@@ -1971,7 +2007,7 @@ static ChangeInfoResult StationChangeInfo(uint stid, int numinfo, int prop, Byte
 				break;
 
 			case 0x0E: // Define custom layout
-				statspec->copied_layouts = false;
+				ClrBit(statspec->internal_flags, SSIF_COPIED_LAYOUTS);
 
 				while (buf->HasData()) {
 					byte length = buf->ReadByte();
@@ -2034,7 +2070,7 @@ static ChangeInfoResult StationChangeInfo(uint stid, int numinfo, int prop, Byte
 				statspec->lengths   = srcstatspec->lengths;
 				statspec->platforms = srcstatspec->platforms;
 				statspec->layouts   = srcstatspec->layouts;
-				statspec->copied_layouts = true;
+				SetBit(statspec->internal_flags, SSIF_COPIED_LAYOUTS);
 				break;
 			}
 
@@ -2092,8 +2128,26 @@ static ChangeInfoResult StationChangeInfo(uint stid, int numinfo, int prop, Byte
 				}
 				break;
 
+			case A0RPI_STATION_MIN_BRIDGE_HEIGHT:
+				if (MappedPropertyLengthMismatch(buf, 8, mapping_entry)) break;
+				FALLTHROUGH;
+			case 0x1B: // Minimum height for a bridge above
+				SetBit(statspec->internal_flags, SSIF_BRIDGE_HEIGHTS_SET);
+				for (uint i = 0; i < 8; i++) {
+					statspec->bridge_height[i] = buf->ReadByte();
+				}
+				break;
+
+			case A0RPI_STATION_DISALLOWED_BRIDGE_PILLARS:
+				if (MappedPropertyLengthMismatch(buf, 8, mapping_entry)) break;
+				SetBit(statspec->internal_flags, SSIF_BRIDGE_DISALLOWED_PILLARS_SET);
+				for (uint i = 0; i < 8; i++) {
+					statspec->bridge_disallowed_pillars[i] = buf->ReadByte();
+				}
+				break;
+
 			default:
-				ret = CIR_UNKNOWN;
+				ret = HandleAction0PropertyDefault(buf, prop);
 				break;
 		}
 	}
@@ -2109,7 +2163,7 @@ static ChangeInfoResult StationChangeInfo(uint stid, int numinfo, int prop, Byte
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult CanalChangeInfo(uint id, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult CanalChangeInfo(uint id, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -2131,7 +2185,7 @@ static ChangeInfoResult CanalChangeInfo(uint id, int numinfo, int prop, ByteRead
 				break;
 
 			default:
-				ret = CIR_UNKNOWN;
+				ret = HandleAction0PropertyDefault(buf, prop);
 				break;
 		}
 	}
@@ -2147,7 +2201,7 @@ static ChangeInfoResult CanalChangeInfo(uint id, int numinfo, int prop, ByteRead
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult BridgeChangeInfo(uint brid, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult BridgeChangeInfo(uint brid, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -2214,6 +2268,7 @@ static ChangeInfoResult BridgeChangeInfo(uint brid, int numinfo, int prop, ByteR
 						MapSpriteMappingRecolour(&bridge->sprite_table[tableid][sprite]);
 					}
 				}
+				if (!HasBit(bridge->ctrl_flags, BSCF_CUSTOM_PILLAR_FLAGS)) SetBit(bridge->ctrl_flags, BSCF_INVALID_PILLAR_FLAGS);
 				break;
 			}
 
@@ -2242,8 +2297,25 @@ static ChangeInfoResult BridgeChangeInfo(uint brid, int numinfo, int prop, ByteR
 				bridge->price = buf->ReadWord();
 				break;
 
+			case A0RPI_BRIDGE_MENU_ICON:
+				if (MappedPropertyLengthMismatch(buf, 4, mapping_entry)) break;
+				FALLTHROUGH;
+			case 0x14: // purchase sprite
+				bridge->sprite = buf->ReadWord();
+				bridge->pal    = buf->ReadWord();
+				break;
+
+			case A0RPI_BRIDGE_PILLAR_FLAGS:
+				if (MappedPropertyLengthMismatch(buf, 12, mapping_entry)) break;
+				for (uint i = 0; i < 12; i++) {
+					bridge->pillar_flags[i] = buf->ReadByte();
+				}
+				ClrBit(bridge->ctrl_flags, BSCF_INVALID_PILLAR_FLAGS);
+				SetBit(bridge->ctrl_flags, BSCF_CUSTOM_PILLAR_FLAGS);
+				break;
+
 			default:
-				ret = CIR_UNKNOWN;
+				ret = HandleAction0PropertyDefault(buf, prop);
 				break;
 		}
 	}
@@ -2310,7 +2382,7 @@ static ChangeInfoResult IgnoreTownHouseProperty(int prop, ByteReader *buf)
 			break;
 
 		default:
-			ret = CIR_UNKNOWN;
+			ret = HandleAction0PropertyDefault(buf, prop);
 			break;
 	}
 	return ret;
@@ -2324,7 +2396,7 @@ static ChangeInfoResult IgnoreTownHouseProperty(int prop, ByteReader *buf)
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult TownHouseChangeInfo(uint hid, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult TownHouseChangeInfo(uint hid, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -2562,7 +2634,7 @@ static ChangeInfoResult TownHouseChangeInfo(uint hid, int numinfo, int prop, Byt
 			}
 
 			default:
-				ret = CIR_UNKNOWN;
+				ret = HandleAction0PropertyDefault(buf, prop);
 				break;
 		}
 	}
@@ -2617,7 +2689,7 @@ static ChangeInfoResult LoadTranslationTable(uint gvid, int numinfo, ByteReader 
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult GlobalVarChangeInfo(uint gvid, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult GlobalVarChangeInfo(uint gvid, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	/* Properties which are handled as a whole */
 	switch (prop) {
@@ -2830,7 +2902,7 @@ static ChangeInfoResult GlobalVarChangeInfo(uint gvid, int numinfo, int prop, By
 			}
 
 			default:
-				ret = CIR_UNKNOWN;
+				ret = HandleAction0PropertyDefault(buf, prop);
 				break;
 		}
 	}
@@ -2838,7 +2910,7 @@ static ChangeInfoResult GlobalVarChangeInfo(uint gvid, int numinfo, int prop, By
 	return ret;
 }
 
-static ChangeInfoResult GlobalVarReserveInfo(uint gvid, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult GlobalVarReserveInfo(uint gvid, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	/* Properties which are handled as a whole */
 	switch (prop) {
@@ -2898,7 +2970,7 @@ static ChangeInfoResult GlobalVarReserveInfo(uint gvid, int numinfo, int prop, B
 				break;
 
 			default:
-				ret = CIR_UNKNOWN;
+				ret = HandleAction0PropertyDefault(buf, prop);
 				break;
 		}
 	}
@@ -2915,7 +2987,7 @@ static ChangeInfoResult GlobalVarReserveInfo(uint gvid, int numinfo, int prop, B
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult CargoChangeInfo(uint cid, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult CargoChangeInfo(uint cid, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -3037,7 +3109,7 @@ static ChangeInfoResult CargoChangeInfo(uint cid, int numinfo, int prop, ByteRea
 				break;
 
 			default:
-				ret = CIR_UNKNOWN;
+				ret = HandleAction0PropertyDefault(buf, prop);
 				break;
 		}
 	}
@@ -3054,7 +3126,7 @@ static ChangeInfoResult CargoChangeInfo(uint cid, int numinfo, int prop, ByteRea
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult SoundEffectChangeInfo(uint sid, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult SoundEffectChangeInfo(uint sid, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -3095,7 +3167,7 @@ static ChangeInfoResult SoundEffectChangeInfo(uint sid, int numinfo, int prop, B
 			}
 
 			default:
-				ret = CIR_UNKNOWN;
+				ret = HandleAction0PropertyDefault(buf, prop);
 				break;
 		}
 	}
@@ -3135,7 +3207,7 @@ static ChangeInfoResult IgnoreIndustryTileProperty(int prop, ByteReader *buf)
 			break;
 
 		default:
-			ret = CIR_UNKNOWN;
+			ret = HandleAction0PropertyDefault(buf, prop);
 			break;
 	}
 	return ret;
@@ -3149,7 +3221,7 @@ static ChangeInfoResult IgnoreIndustryTileProperty(int prop, ByteReader *buf)
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult IndustrytilesChangeInfo(uint indtid, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult IndustrytilesChangeInfo(uint indtid, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -3273,7 +3345,7 @@ static ChangeInfoResult IndustrytilesChangeInfo(uint indtid, int numinfo, int pr
 			}
 
 			default:
-				ret = CIR_UNKNOWN;
+				ret = HandleAction0PropertyDefault(buf, prop);
 				break;
 		}
 	}
@@ -3366,7 +3438,7 @@ static ChangeInfoResult IgnoreIndustryProperty(int prop, ByteReader *buf)
 		}
 
 		default:
-			ret = CIR_UNKNOWN;
+			ret = HandleAction0PropertyDefault(buf, prop);
 			break;
 	}
 	return ret;
@@ -3399,7 +3471,7 @@ static bool ValidateIndustryLayout(const IndustryTileLayout &layout)
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult IndustriesChangeInfo(uint indid, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult IndustriesChangeInfo(uint indid, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -3766,7 +3838,7 @@ static ChangeInfoResult IndustriesChangeInfo(uint indid, int numinfo, int prop, 
 			}
 
 			default:
-				ret = CIR_UNKNOWN;
+				ret = HandleAction0PropertyDefault(buf, prop);
 				break;
 		}
 	}
@@ -3792,8 +3864,11 @@ static void DuplicateTileTable(AirportSpec *as)
 		MemCpyT(table_list[i], as->table[i], num_tiles);
 	}
 	as->table = table_list;
-	HangarTileTable *depot_table = MallocT<HangarTileTable>(as->nof_depots);
-	MemCpyT(depot_table, as->depot_table, as->nof_depots);
+	HangarTileTable *depot_table = nullptr;
+	if (as->nof_depots > 0) {
+		depot_table = MallocT<HangarTileTable>(as->nof_depots);
+		MemCpyT(depot_table, as->depot_table, as->nof_depots);
+	}
 	as->depot_table = depot_table;
 	Direction *rotation = MallocT<Direction>(as->num_table);
 	MemCpyT(rotation, as->rotation, as->num_table);
@@ -3808,7 +3883,7 @@ static void DuplicateTileTable(AirportSpec *as)
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult AirportChangeInfo(uint airport, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult AirportChangeInfo(uint airport, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -3867,8 +3942,8 @@ static ChangeInfoResult AirportChangeInfo(uint airport, int numinfo, int prop, B
 			}
 
 			case 0x0A: { // Set airport layout
+				as->num_table = buf->ReadByte(); // Number of layouts
 				free(as->rotation);
-				as->num_table = buf->ReadByte(); // Number of layaouts
 				as->rotation = MallocT<Direction>(as->num_table);
 				uint32 defsize = buf->ReadDWord();  // Total size of the definition
 				AirportTileTable **tile_table = CallocT<AirportTileTable*>(as->num_table); // Table with tiles to compose the airport
@@ -3966,7 +4041,7 @@ static ChangeInfoResult AirportChangeInfo(uint airport, int numinfo, int prop, B
 				break;
 
 			default:
-				ret = CIR_UNKNOWN;
+				ret = HandleAction0PropertyDefault(buf, prop);
 				break;
 		}
 	}
@@ -4011,7 +4086,7 @@ static ChangeInfoResult IgnoreObjectProperty(uint prop, ByteReader *buf)
 			break;
 
 		default:
-			ret = CIR_UNKNOWN;
+			ret = HandleAction0PropertyDefault(buf, prop);
 			break;
 	}
 
@@ -4026,7 +4101,7 @@ static ChangeInfoResult IgnoreObjectProperty(uint prop, ByteReader *buf)
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult ObjectChangeInfo(uint id, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult ObjectChangeInfo(uint id, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -4141,7 +4216,7 @@ static ChangeInfoResult ObjectChangeInfo(uint id, int numinfo, int prop, ByteRea
 				break;
 
 			default:
-				ret = CIR_UNKNOWN;
+				ret = HandleAction0PropertyDefault(buf, prop);
 				break;
 		}
 	}
@@ -4157,7 +4232,7 @@ static ChangeInfoResult ObjectChangeInfo(uint id, int numinfo, int prop, ByteRea
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult RailTypeChangeInfo(uint id, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult RailTypeChangeInfo(uint id, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -4279,7 +4354,7 @@ static ChangeInfoResult RailTypeChangeInfo(uint id, int numinfo, int prop, ByteR
 				break;
 
 			default:
-				ret = CIR_UNKNOWN;
+				ret = HandleAction0PropertyDefault(buf, prop);
 				break;
 		}
 	}
@@ -4287,7 +4362,7 @@ static ChangeInfoResult RailTypeChangeInfo(uint id, int numinfo, int prop, ByteR
 	return ret;
 }
 
-static ChangeInfoResult RailTypeReserveInfo(uint id, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult RailTypeReserveInfo(uint id, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -4359,7 +4434,7 @@ static ChangeInfoResult RailTypeReserveInfo(uint id, int numinfo, int prop, Byte
 				break;
 
 			default:
-				ret = CIR_UNKNOWN;
+				ret = HandleAction0PropertyDefault(buf, prop);
 				break;
 		}
 	}
@@ -4375,7 +4450,7 @@ static ChangeInfoResult RailTypeReserveInfo(uint id, int numinfo, int prop, Byte
  * @param buf The property value.
  * @return ChangeInfoResult.
  */
-static ChangeInfoResult RoadTypeChangeInfo(uint id, int numinfo, int prop, ByteReader *buf, RoadTramType rtt)
+static ChangeInfoResult RoadTypeChangeInfo(uint id, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf, RoadTramType rtt)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -4488,18 +4563,18 @@ static ChangeInfoResult RoadTypeChangeInfo(uint id, int numinfo, int prop, ByteR
 	return ret;
 }
 
-static ChangeInfoResult RoadTypeChangeInfo(uint id, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult RoadTypeChangeInfo(uint id, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
-	return RoadTypeChangeInfo(id, numinfo, prop, buf, RTT_ROAD);
+	return RoadTypeChangeInfo(id, numinfo, prop, mapping_entry, buf, RTT_ROAD);
 }
 
-static ChangeInfoResult TramTypeChangeInfo(uint id, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult TramTypeChangeInfo(uint id, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
-	return RoadTypeChangeInfo(id, numinfo, prop, buf, RTT_TRAM);
+	return RoadTypeChangeInfo(id, numinfo, prop, mapping_entry, buf, RTT_TRAM);
 }
 
 
-static ChangeInfoResult RoadTypeReserveInfo(uint id, int numinfo, int prop, ByteReader *buf, RoadTramType rtt)
+static ChangeInfoResult RoadTypeReserveInfo(uint id, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf, RoadTramType rtt)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -4577,17 +4652,17 @@ static ChangeInfoResult RoadTypeReserveInfo(uint id, int numinfo, int prop, Byte
 	return ret;
 }
 
-static ChangeInfoResult RoadTypeReserveInfo(uint id, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult RoadTypeReserveInfo(uint id, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
-	return RoadTypeReserveInfo(id, numinfo, prop, buf, RTT_ROAD);
+	return RoadTypeReserveInfo(id, numinfo, prop, mapping_entry, buf, RTT_ROAD);
 }
 
-static ChangeInfoResult TramTypeReserveInfo(uint id, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult TramTypeReserveInfo(uint id, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
-	return RoadTypeReserveInfo(id, numinfo, prop, buf, RTT_TRAM);
+	return RoadTypeReserveInfo(id, numinfo, prop, mapping_entry, buf, RTT_TRAM);
 }
 
-static ChangeInfoResult AirportTilesChangeInfo(uint airtid, int numinfo, int prop, ByteReader *buf)
+static ChangeInfoResult AirportTilesChangeInfo(uint airtid, int numinfo, int prop, const GRFFilePropertyRemapEntry *mapping_entry, ByteReader *buf)
 {
 	ChangeInfoResult ret = CIR_SUCCESS;
 
@@ -4669,7 +4744,7 @@ static ChangeInfoResult AirportTilesChangeInfo(uint airtid, int numinfo, int pro
 				break;
 
 			default:
-				ret = CIR_UNKNOWN;
+				ret = HandleAction0PropertyDefault(buf, prop);
 				break;
 		}
 	}
@@ -4677,7 +4752,7 @@ static ChangeInfoResult AirportTilesChangeInfo(uint airtid, int numinfo, int pro
 	return ret;
 }
 
-static bool HandleChangeInfoResult(const char *caller, ChangeInfoResult cir, uint8 feature, uint8 property)
+static bool HandleChangeInfoResult(const char *caller, ChangeInfoResult cir, uint8 feature, int property)
 {
 	switch (cir) {
 		default: NOT_REACHED();
@@ -4703,6 +4778,38 @@ static bool HandleChangeInfoResult(const char *caller, ChangeInfoResult cir, uin
 			if (cir != CIR_INVALID_ID) error->param_value[1] = property;
 			return true;
 		}
+	}
+}
+
+struct GRFFilePropertyDescriptor {
+	int prop;
+	const GRFFilePropertyRemapEntry *entry;
+
+	GRFFilePropertyDescriptor(int prop, const GRFFilePropertyRemapEntry *entry)
+			: prop(prop), entry(entry) {}
+};
+
+static GRFFilePropertyDescriptor ReadAction0PropertyID(ByteReader *buf, uint8 feature)
+{
+	uint8 raw_prop = buf->ReadByte();
+	const GRFFilePropertyRemapSet &remap = _cur.grffile->action0_property_remaps[feature];
+	if (remap.remapped_ids[raw_prop]) {
+		auto iter = remap.mapping.find(raw_prop);
+		assert(iter != remap.mapping.end());
+		const GRFFilePropertyRemapEntry &def = iter->second;
+		int prop = def.id;
+		if (prop == A0RPI_UNKNOWN_ERROR) {
+			grfmsg(0, "Error: Unimplemented mapped property: %s, feature: %X, mapped to: %X", def.name, def.feature, raw_prop);
+			GRFError *error = DisableGrf(STR_NEWGRF_ERROR_UNIMPLEMETED_MAPPED_PROPERTY);
+			error->data = stredup(def.name);
+			error->param_value[1] = def.feature;
+			error->param_value[2] = raw_prop;
+		} else if (prop == A0RPI_UNKNOWN_IGNORE) {
+			grfmsg(2, "Ignoring unimplemented mapped property: %s, feature: %X, mapped to: %X", def.name, def.feature, raw_prop);
+		}
+		return GRFFilePropertyDescriptor(prop, &def);
+	} else {
+		return GRFFilePropertyDescriptor(raw_prop, nullptr);
 	}
 }
 
@@ -4742,6 +4849,7 @@ static void FeatureChangeInfo(ByteReader *buf)
 		/* GSF_ROADTYPES */     RoadTypeChangeInfo,
 		/* GSF_TRAMTYPES */     TramTypeChangeInfo,
 	};
+	static_assert(lengthof(handler) == lengthof(_cur.grffile->action0_property_remaps), "Action 0 feature list length mismatch");
 
 	uint8 feature  = buf->ReadByte();
 	uint8 numprops = buf->ReadByte();
@@ -4765,10 +4873,10 @@ static void FeatureChangeInfo(ByteReader *buf)
 	SetBit(_cur.grffile->grf_features, feature);
 
 	while (numprops-- && buf->HasData()) {
-		uint8 prop = buf->ReadByte();
+		GRFFilePropertyDescriptor desc = ReadAction0PropertyID(buf, feature);
 
-		ChangeInfoResult cir = handler[feature](engine, numinfo, prop, buf);
-		if (HandleChangeInfoResult("FeatureChangeInfo", cir, feature, prop)) return;
+		ChangeInfoResult cir = handler[feature](engine, numinfo, desc.prop, desc.entry, buf);
+		if (HandleChangeInfoResult("FeatureChangeInfo", cir, feature, desc.prop)) return;
 	}
 }
 
@@ -4781,14 +4889,14 @@ static void SafeChangeInfo(ByteReader *buf)
 	buf->ReadExtendedByte(); // id
 
 	if (feature == GSF_BRIDGES && numprops == 1) {
-		uint8 prop = buf->ReadByte();
+		GRFFilePropertyDescriptor desc = ReadAction0PropertyID(buf, feature);
 		/* Bridge property 0x0D is redefinition of sprite layout tables, which
 		 * is considered safe. */
-		if (prop == 0x0D) return;
+		if (desc.prop == 0x0D) return;
 	} else if (feature == GSF_GLOBALVAR && numprops == 1) {
-		uint8 prop = buf->ReadByte();
+		GRFFilePropertyDescriptor desc = ReadAction0PropertyID(buf, feature);
 		/* Engine ID Mappings are safe, if the source is static */
-		if (prop == 0x11) {
+		if (desc.prop == 0x11) {
 			bool is_safe = true;
 			for (uint i = 0; i < numinfo; i++) {
 				uint32 s = buf->ReadDWord();
@@ -4821,33 +4929,33 @@ static void ReserveChangeInfo(ByteReader *buf)
 	uint8 index    = buf->ReadExtendedByte();
 
 	while (numprops-- && buf->HasData()) {
-		uint8 prop = buf->ReadByte();
+		GRFFilePropertyDescriptor desc = ReadAction0PropertyID(buf, feature);
 		ChangeInfoResult cir = CIR_SUCCESS;
 
 		switch (feature) {
 			default: NOT_REACHED();
 			case GSF_CARGOES:
-				cir = CargoChangeInfo(index, numinfo, prop, buf);
+				cir = CargoChangeInfo(index, numinfo, desc.prop, desc.entry, buf);
 				break;
 
 			case GSF_GLOBALVAR:
-				cir = GlobalVarReserveInfo(index, numinfo, prop, buf);
+				cir = GlobalVarReserveInfo(index, numinfo, desc.prop, desc.entry, buf);
 				break;
 
 			case GSF_RAILTYPES:
-				cir = RailTypeReserveInfo(index, numinfo, prop, buf);
+				cir = RailTypeReserveInfo(index, numinfo, desc.prop, desc.entry, buf);
 				break;
 
 			case GSF_ROADTYPES:
-				cir = RoadTypeReserveInfo(index, numinfo, prop, buf);
+				cir = RoadTypeReserveInfo(index, numinfo, desc.prop, desc.entry, buf);
 				break;
 
 			case GSF_TRAMTYPES:
-				cir = TramTypeReserveInfo(index, numinfo, prop, buf);
+				cir = TramTypeReserveInfo(index, numinfo, desc.prop, desc.entry, buf);
 				break;
 		}
 
-		if (HandleChangeInfoResult("ReserveChangeInfo", cir, feature, prop)) return;
+		if (HandleChangeInfoResult("ReserveChangeInfo", cir, feature, desc.prop)) return;
 	}
 }
 
@@ -6084,22 +6192,6 @@ static uint16 SanitizeSpriteOffset(uint16& num, uint16 offset, int max_sprites, 
 	return 0;
 }
 
-
-/** The type of action 5 type. */
-enum Action5BlockType {
-	A5BLOCK_FIXED,                ///< Only allow replacing a whole block of sprites. (TTDP compatible)
-	A5BLOCK_ALLOW_OFFSET,         ///< Allow replacing any subset by specifiing an offset.
-	A5BLOCK_INVALID,              ///< unknown/not-implemented type
-};
-/** Information about a single action 5 type. */
-struct Action5Type {
-	Action5BlockType block_type;  ///< How is this Action5 type processed?
-	SpriteID sprite_base;         ///< Load the sprites starting from this sprite.
-	uint16 min_sprites;           ///< If the Action5 contains less sprites, the whole block will be ignored.
-	uint16 max_sprites;           ///< If the Action5 contains more sprites, only the first max_sprites sprites will be used.
-	const char *name;             ///< Name for error messages.
-};
-
 /** The information about action 5 types. */
 static const Action5Type _action5_types[] = {
 	/* Note: min_sprites should not be changed. Therefore these constants are directly here and not in sprites.h */
@@ -6144,32 +6236,54 @@ static void GraphicsNew(ByteReader *buf)
 	uint16 offset = HasBit(type, 7) ? buf->ReadExtendedByte() : 0;
 	ClrBit(type, 7); // Clear the high bit as that only indicates whether there is an offset.
 
-	if ((type == 0x0D) && (num == 10) && HasBit(_cur.grfconfig->flags, GCF_SYSTEM)) {
-		/* Special not-TTDP-compatible case used in openttd.grf
-		 * Missing shore sprites and initialisation of SPR_SHORE_BASE */
-		grfmsg(2, "GraphicsNew: Loading 10 missing shore sprites from extra grf.");
-		LoadNextSprite(SPR_SHORE_BASE +  0, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_STEEP_S
-		LoadNextSprite(SPR_SHORE_BASE +  5, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_STEEP_W
-		LoadNextSprite(SPR_SHORE_BASE +  7, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_WSE
-		LoadNextSprite(SPR_SHORE_BASE + 10, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_STEEP_N
-		LoadNextSprite(SPR_SHORE_BASE + 11, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_NWS
-		LoadNextSprite(SPR_SHORE_BASE + 13, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_ENW
-		LoadNextSprite(SPR_SHORE_BASE + 14, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_SEN
-		LoadNextSprite(SPR_SHORE_BASE + 15, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_STEEP_E
-		LoadNextSprite(SPR_SHORE_BASE + 16, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_EW
-		LoadNextSprite(SPR_SHORE_BASE + 17, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_NS
-		if (_loaded_newgrf_features.shore == SHORE_REPLACE_NONE) _loaded_newgrf_features.shore = SHORE_REPLACE_ONLY_NEW;
-		return;
-	}
+	const Action5Type *action5_type;
+	const Action5TypeRemapSet &remap = _cur.grffile->action5_type_remaps;
+	if (remap.remapped_ids[type]) {
+		auto iter = remap.mapping.find(type);
+		assert(iter != remap.mapping.end());
+		const Action5TypeRemapEntry &def = iter->second;
+		if (def.info == nullptr) {
+			if (def.fallback_mode == GPMFM_ERROR_ON_USE) {
+				grfmsg(0, "Error: Unimplemented action 5 type: %s, mapped to: %X", def.name, type);
+				GRFError *error = DisableGrf(STR_NEWGRF_ERROR_UNIMPLEMETED_MAPPED_ACTION5_TYPE);
+				error->data = stredup(def.name);
+				error->param_value[1] = type;
+			} else if (def.fallback_mode == GPMFM_IGNORE) {
+				grfmsg(2, "Ignoring unimplemented action 5 type: %s, mapped to: %X", def.name, type);
+			}
+			_cur.skip_sprites = num;
+			return;
+		} else {
+			action5_type = def.info;
+		}
+	} else {
+		if ((type == 0x0D) && (num == 10) && HasBit(_cur.grfconfig->flags, GCF_SYSTEM)) {
+			/* Special not-TTDP-compatible case used in openttd.grf
+			 * Missing shore sprites and initialisation of SPR_SHORE_BASE */
+			grfmsg(2, "GraphicsNew: Loading 10 missing shore sprites from extra grf.");
+			LoadNextSprite(SPR_SHORE_BASE +  0, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_STEEP_S
+			LoadNextSprite(SPR_SHORE_BASE +  5, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_STEEP_W
+			LoadNextSprite(SPR_SHORE_BASE +  7, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_WSE
+			LoadNextSprite(SPR_SHORE_BASE + 10, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_STEEP_N
+			LoadNextSprite(SPR_SHORE_BASE + 11, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_NWS
+			LoadNextSprite(SPR_SHORE_BASE + 13, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_ENW
+			LoadNextSprite(SPR_SHORE_BASE + 14, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_SEN
+			LoadNextSprite(SPR_SHORE_BASE + 15, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_STEEP_E
+			LoadNextSprite(SPR_SHORE_BASE + 16, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_EW
+			LoadNextSprite(SPR_SHORE_BASE + 17, _cur.file_index, _cur.nfo_line++, _cur.grf_container_ver); // SLOPE_NS
+			if (_loaded_newgrf_features.shore == SHORE_REPLACE_NONE) _loaded_newgrf_features.shore = SHORE_REPLACE_ONLY_NEW;
+			return;
+		}
 
-	/* Supported type? */
-	if ((type >= lengthof(_action5_types)) || (_action5_types[type].block_type == A5BLOCK_INVALID)) {
-		grfmsg(2, "GraphicsNew: Custom graphics (type 0x%02X) sprite block of length %u (unimplemented, ignoring)", type, num);
-		_cur.skip_sprites = num;
-		return;
-	}
+		/* Supported type? */
+		if ((type >= lengthof(_action5_types)) || (_action5_types[type].block_type == A5BLOCK_INVALID)) {
+			grfmsg(2, "GraphicsNew: Custom graphics (type 0x%02X) sprite block of length %u (unimplemented, ignoring)", type, num);
+			_cur.skip_sprites = num;
+			return;
+		}
 
-	const Action5Type *action5_type = &_action5_types[type];
+		action5_type = &_action5_types[type];
+	}
 
 	/* Contrary to TTDP we allow always to specify too few sprites as we allow always an offset,
 	 * except for the long version of the shore type:
@@ -6203,9 +6317,17 @@ static void GraphicsNew(ByteReader *buf)
 		if (offset <= depot_no_track_offset && offset + num > depot_no_track_offset) _loaded_newgrf_features.tram = TRAMWAY_REPLACE_DEPOT_NO_TRACK;
 	}
 
-	for (; num > 0; num--) {
+	for (uint16 n = num; n > 0; n--) {
 		_cur.nfo_line++;
 		LoadNextSprite(replace == 0 ? _cur.spriteid++ : replace++, _cur.file_index, _cur.nfo_line, _cur.grf_container_ver);
+	}
+
+	if (type == 0x04 && ((_cur.grfconfig->ident.grfid & 0x00FFFFFF) == OPENTTD_GRAPHICS_BASE_GRF_ID || _cur.grfconfig->ident.grfid == BSWAP32(0xFF4F4701))) {
+		/* Signal graphics action 5: Fill duplicate signal sprite block if this is a baseset GRF or OpenGFX */
+		const SpriteID end = offset + num;
+		for (SpriteID i = offset; i < end; i++) {
+			DupSprite(SPR_SIGNALS_BASE + i, SPR_DUP_SIGNALS_BASE + i);
+		}
 	}
 
 	_cur.skip_sprites = skip_num;
@@ -6246,10 +6368,8 @@ bool GetGlobalVariable(byte param, uint32 *value, const GRFFile *grffile)
 			return true;
 
 		case 0x02: { // detailed date information: month of year (bit 0-7), day of month (bit 8-12), leap year (bit 15), day of year (bit 16-24)
-			YearMonthDay ymd;
-			ConvertDateToYMD(_date, &ymd);
-			Date start_of_year = ConvertYMDToDate(ymd.year, 0, 1);
-			*value = ymd.month | (ymd.day - 1) << 8 | (IsLeapYear(ymd.year) ? 1 << 15 : 0) | (_date - start_of_year) << 16;
+			Date start_of_year = ConvertYMDToDate(_cur_date_ymd.year, 0, 1);
+			*value = _cur_date_ymd.month | (_cur_date_ymd.day - 1) << 8 | (IsLeapYear(_cur_date_ymd.year) ? 1 << 15 : 0) | (_date - start_of_year) << 16;
 			return true;
 		}
 
@@ -6279,7 +6399,7 @@ bool GetGlobalVariable(byte param, uint32 *value, const GRFFile *grffile)
 		}
 
 		case 0x0D: // TTD Version, 00=DOS, 01=Windows
-			*value = _cur.grfconfig->palette & GRFP_USE_MASK;
+			*value = (_cur.grfconfig->palette & GRFP_USE_MASK) | grffile->var8D_overlay;
 			return true;
 
 		case 0x0E: // Y-offset for train sprites
@@ -6321,8 +6441,8 @@ bool GetGlobalVariable(byte param, uint32 *value, const GRFFile *grffile)
 			*value = 0x3F; // constant fake value to avoid desync
 			return true;
 
-		case 0x1D: // TTD Platform, 00=TTDPatch, 01=OpenTTD
-			*value = 1;
+		case 0x1D: // TTD Platform, 00=TTDPatch, 01=OpenTTD, also used for feature tests (bits 31..4)
+			*value = 1 | grffile->var9D_overlay;
 			return true;
 
 		case 0x1E: // Miscellaneous GRF features
@@ -6448,7 +6568,7 @@ static void CfgApply(ByteReader *buf)
 	GRFLineToSpriteOverride::iterator it = _grf_line_to_action6_sprite_override.find(location);
 	if (it != _grf_line_to_action6_sprite_override.end()) {
 		free(preload_sprite);
-		preload_sprite = _grf_line_to_action6_sprite_override[location];
+		preload_sprite = it->second;
 	} else {
 		_grf_line_to_action6_sprite_override[location] = preload_sprite;
 	}
@@ -6715,7 +6835,7 @@ static void ScanInfo(ByteReader *buf)
 
 	if (grf_version < 2 || grf_version > 8) {
 		SetBit(_cur.grfconfig->flags, GCF_INVALID);
-		DEBUG(grf, 0, "%s: NewGRF \"%s\" (GRFID %08X) uses GRF version %d, which is incompatible with this version of OpenTTD.", _cur.grfconfig->filename, name, BSWAP32(grfid), grf_version);
+		DEBUG(grf, 0, "%s: NewGRF \"%s\" (GRFID %08X) uses GRF version %d, which is incompatible with this version of OpenTTD.", _cur.grfconfig->GetDisplayPath(), name, BSWAP32(grfid), grf_version);
 	}
 
 	/* GRF IDs starting with 0xFF are reserved for internal TTDPatch use */
@@ -7420,7 +7540,7 @@ static void GRFInhibit(ByteReader *buf)
 
 		/* Unset activation flag */
 		if (file != nullptr && file != _cur.grfconfig) {
-			grfmsg(2, "GRFInhibit: Deactivating file '%s'", file->filename);
+			grfmsg(2, "GRFInhibit: Deactivating file '%s'", file->GetDisplayPath());
 			GRFError *error = DisableGrf(STR_NEWGRF_ERROR_FORCEFULLY_DISABLED, file);
 			error->data = stredup(_cur.grfconfig->GetName());
 		}
@@ -8093,6 +8213,23 @@ static bool SkipUnknownInfo(ByteReader *buf, byte type);
 static bool HandleNodes(ByteReader *buf, AllowedSubtags *tags);
 
 /**
+ * Try to skip the current branch node and all subnodes.
+ * This is suitable for use with AllowedSubtags.
+ * @param buf Buffer.
+ * @return True if we could skip the node, false if an error occurred.
+ */
+static bool SkipInfoChunk(ByteReader *buf)
+{
+	byte type = buf->ReadByte();
+	while (type != 0) {
+		buf->ReadDWord(); // chunk ID
+		if (!SkipUnknownInfo(buf, type)) return false;
+		type = buf->ReadByte();
+	}
+	return true;
+}
+
+/**
  * Callback function for 'INFO'->'PARA'->param_num->'VALU' to set the names
  * of some parameter values (type uint/enum) or the names of some bits
  * (type bitmask). In both cases the format is the same:
@@ -8185,9 +8322,424 @@ AllowedSubtags _tags_info[] = {
 	AllowedSubtags()
 };
 
+/** Action14 feature definition */
+struct GRFFeatureInfo {
+	const char *name; // nullptr indicates the end of the list
+	uint16 version;
+
+	/** Create empty object used to identify the end of a list. */
+	GRFFeatureInfo() :
+		name(nullptr),
+		version(0)
+	{}
+
+	GRFFeatureInfo(const char *name, uint16 version) :
+		name(name),
+		version(version)
+	{}
+};
+
+/** Action14 feature list */
+static const GRFFeatureInfo _grf_feature_list[] = {
+	GRFFeatureInfo("feature_test", 1),
+	GRFFeatureInfo("property_mapping", 1),
+	GRFFeatureInfo("action5_type_id_mapping", 1),
+	GRFFeatureInfo("action0_station_prop1B", 1),
+	GRFFeatureInfo("action0_station_disallowed_bridge_pillars", 1),
+	GRFFeatureInfo("varaction2_station_var42", 1),
+	GRFFeatureInfo("more_bridge_types", 1),
+	GRFFeatureInfo("action0_bridge_prop14", 1),
+	GRFFeatureInfo("action0_bridge_pillar_flags", 1),
+	GRFFeatureInfo("action5_programmable_signals", 1),
+	GRFFeatureInfo(),
+};
+
+/** Action14 feature test instance */
+struct GRFFeatureTest {
+	const GRFFeatureInfo *feature;
+	uint16 min_version;
+	uint16 max_version;
+	uint8 platform_var_bit;
+
+	void Reset()
+	{
+		this->feature = nullptr;
+		this->min_version = 1;
+		this->max_version = UINT16_MAX;
+		this->platform_var_bit = 0;
+	}
+
+	void ExecuteTest()
+	{
+		uint16 version = (this->feature != nullptr) ? this->feature->version : 0;
+		bool has_feature = (version >= this->min_version && version <= this->max_version);
+		if (this->platform_var_bit > 0) {
+			SB(_cur.grffile->var9D_overlay, this->platform_var_bit, 1, has_feature ? 1 : 0);
+			grfmsg(2, "Action 14 feature test: feature test: setting bit %u of var 0x9D to %u, %u", platform_var_bit, has_feature ? 1 : 0, _cur.grffile->var9D_overlay);
+		} else {
+			grfmsg(2, "Action 14 feature test: feature test: doing nothing: %u", has_feature ? 1 : 0);
+		}
+	}
+};
+
+static GRFFeatureTest _current_grf_feature_test;
+
+/** Callback function for 'FTST'->'NAME' to set the name of the feature being tested. */
+static bool ChangeGRFFeatureTestName(byte langid, const char *str)
+{
+	for (const GRFFeatureInfo *info = _grf_feature_list; info->name != nullptr; info++) {
+		if (strcmp(info->name, str) == 0) {
+			_current_grf_feature_test.feature = info;
+			grfmsg(2, "Action 14 feature test: found feature named: '%s' (version: %u) in 'FTST'->'NAME'", str, info->version);
+			return true;
+		}
+	}
+	grfmsg(2, "Action 14 feature test: could not find feature named: '%s' in 'FTST'->'NAME'", str);
+	_current_grf_feature_test.feature = nullptr;
+	return true;
+}
+
+/** Callback function for 'FTST'->'MINV' to set the minimum version of the feature being tested. */
+static bool ChangeGRFFeatureMinVersion(size_t len, ByteReader *buf)
+{
+	if (len != 2) {
+		grfmsg(2, "Action 14 feature test: expected 2 bytes for 'FTST'->'MINV' but got " PRINTF_SIZE ", ignoring this field", len);
+		buf->Skip(len);
+	} else {
+		_current_grf_feature_test.min_version = buf->ReadWord();
+	}
+	return true;
+}
+
+/** Callback function for 'FTST'->'MAXV' to set the maximum version of the feature being tested. */
+static bool ChangeGRFFeatureMaxVersion(size_t len, ByteReader *buf)
+{
+	if (len != 2) {
+		grfmsg(2, "Action 14 feature test: expected 2 bytes for 'FTST'->'MAXV' but got " PRINTF_SIZE ", ignoring this field", len);
+		buf->Skip(len);
+	} else {
+		_current_grf_feature_test.max_version = buf->ReadWord();
+	}
+	return true;
+}
+
+/** Callback function for 'FTST'->'SETP' to set the bit number of global variable 9D (platform version) to set/unset with the result of the feature test. */
+static bool ChangeGRFFeatureSetPlatformVarBit(size_t len, ByteReader *buf)
+{
+	if (len != 1) {
+		grfmsg(2, "Action 14 feature test: expected 1 byte for 'FTST'->'SETP' but got " PRINTF_SIZE ", ignoring this field", len);
+		buf->Skip(len);
+	} else {
+		uint8 bit_number = buf->ReadByte();
+		if (bit_number >= 4 && bit_number <= 31) {
+			_current_grf_feature_test.platform_var_bit = bit_number;
+		} else {
+			grfmsg(2, "Action 14 feature test: expected a bit number >= 4 and <= 32 for 'FTST'->'SETP' but got %u, ignoring this field", bit_number);
+		}
+	}
+	return true;
+}
+
+/** Action14 tags for the FTST node */
+AllowedSubtags _tags_ftst[] = {
+	AllowedSubtags('NAME', ChangeGRFFeatureTestName),
+	AllowedSubtags('MINV', ChangeGRFFeatureMinVersion),
+	AllowedSubtags('MAXV', ChangeGRFFeatureMaxVersion),
+	AllowedSubtags('SETP', ChangeGRFFeatureSetPlatformVarBit),
+	AllowedSubtags()
+};
+
+/**
+ * Callback function for 'FTST' (feature test)
+ */
+static bool HandleFeatureTestInfo(ByteReader *buf)
+{
+	_current_grf_feature_test.Reset();
+	HandleNodes(buf, _tags_ftst);
+	_current_grf_feature_test.ExecuteTest();
+	return true;
+}
+
+/** Action14 Action0 remappable property list */
+static const GRFPropertyMapDefinition _grf_action0_remappable_properties[] = {
+	GRFPropertyMapDefinition(GSF_STATIONS, A0RPI_STATION_MIN_BRIDGE_HEIGHT, "station_min_bridge_height"),
+	GRFPropertyMapDefinition(GSF_STATIONS, A0RPI_STATION_DISALLOWED_BRIDGE_PILLARS, "station_disallowed_bridge_pillars"),
+	GRFPropertyMapDefinition(GSF_BRIDGES, A0RPI_BRIDGE_MENU_ICON, "bridge_menu_icon"),
+	GRFPropertyMapDefinition(GSF_BRIDGES, A0RPI_BRIDGE_PILLAR_FLAGS, "bridge_pillar_flags"),
+	GRFPropertyMapDefinition(),
+};
+
+/** Action14 Action5 remappable type list */
+static const Action5TypeRemapDefinition _grf_action5_remappable_types[] = {
+	Action5TypeRemapDefinition("programmable_signals", A5BLOCK_ALLOW_OFFSET, SPR_PROGSIGNAL_BASE, 1, 32, "Programmable pre-signal graphics"),
+	Action5TypeRemapDefinition(),
+};
+
+/** Action14 Action0 property map action instance */
+struct GRFPropertyMapAction {
+	const char *tag_name = nullptr;
+	const char *descriptor = nullptr;
+
+	int feature;
+	int prop_id;
+	std::string name;
+	GRFPropertyMapFallbackMode fallback_mode;
+	uint8 ttd_ver_var_bit;
+
+	void Reset(const char *tag, const char *desc)
+	{
+		this->tag_name = tag;
+		this->descriptor = desc;
+
+		this->feature = -1;
+		this->prop_id = -1;
+		this->name.clear();
+		this->fallback_mode = GPMFM_IGNORE;
+		this->ttd_ver_var_bit = 0;
+	}
+
+	void ExecutePropertyRemapping()
+	{
+		if (this->feature < 0) {
+			grfmsg(2, "Action 14 %s remapping: no feature defined, doing nothing", this->descriptor);
+			return;
+		}
+		if (this->prop_id < 0) {
+			grfmsg(2, "Action 14 %s remapping: no property ID defined, doing nothing", this->descriptor);
+			return;
+		}
+		if (this->name.empty()) {
+			grfmsg(2, "Action 14 %s remapping: no name defined, doing nothing", this->descriptor);
+			return;
+		}
+		bool success = false;
+		const char *str = this->name.c_str();
+		for (const GRFPropertyMapDefinition *info = _grf_action0_remappable_properties; info->name != nullptr; info++) {
+			if (info->feature == this->feature && strcmp(info->name, str) == 0) {
+				GRFFilePropertyRemapEntry &entry = _cur.grffile->action0_property_remaps[this->feature].Entry(this->prop_id);
+				entry.name = info->name;
+				entry.id = info->id;
+				entry.feature = this->feature;
+				entry.property_id = this->prop_id;
+				success = true;
+				break;
+			}
+		}
+		if (this->ttd_ver_var_bit > 0) {
+			SB(_cur.grffile->var8D_overlay, this->ttd_ver_var_bit, 1, success ? 1 : 0);
+		}
+		if (!success) {
+			if (this->fallback_mode == GPMFM_ERROR_ON_DEFINITION) {
+				grfmsg(0, "Error: Unimplemented mapped %s: %s, feature: %X, mapped to: %X", this->descriptor, str, this->feature, this->prop_id);
+				GRFError *error = DisableGrf(STR_NEWGRF_ERROR_UNIMPLEMETED_MAPPED_PROPERTY);
+				error->data = stredup(str);
+				error->param_value[1] = this->feature;
+				error->param_value[2] = this->prop_id;
+			} else {
+				const char *str_store = stredup(str);
+				grfmsg(2, "Unimplemented mapped %s: %s, feature: %X, mapped to: %X, %s on use",
+						this->descriptor, str, this->feature, this->prop_id, (this->fallback_mode == GPMFM_IGNORE) ? "ignoring" : "error");
+				_cur.grffile->remap_unknown_property_names.emplace_back(str_store);
+				GRFFilePropertyRemapEntry &entry = _cur.grffile->action0_property_remaps[this->feature].Entry(this->prop_id);
+				entry.name = str_store;
+				entry.id = (this->fallback_mode == GPMFM_IGNORE) ? A0RPI_UNKNOWN_IGNORE : A0RPI_UNKNOWN_ERROR;
+				entry.feature = this->feature;
+				entry.property_id = this->prop_id;
+			}
+		}
+	}
+
+	void ExecuteAction5TypeRemapping()
+	{
+		if (this->prop_id < 0) {
+			grfmsg(2, "Action 14 %s remapping: no type ID defined, doing nothing", this->descriptor);
+			return;
+		}
+		if (this->name.empty()) {
+			grfmsg(2, "Action 14 %s remapping: no name defined, doing nothing", this->descriptor);
+			return;
+		}
+		bool success = false;
+		const char *str = this->name.c_str();
+		for (const Action5TypeRemapDefinition *info = _grf_action5_remappable_types; info->name != nullptr; info++) {
+			if (strcmp(info->name, str) == 0) {
+				Action5TypeRemapEntry &entry = _cur.grffile->action5_type_remaps.Entry(this->prop_id);
+				entry.name = info->name;
+				entry.info = &(info->info);
+				entry.type_id = this->prop_id;
+				success = true;
+				break;
+			}
+		}
+		if (this->ttd_ver_var_bit > 0) {
+			SB(_cur.grffile->var8D_overlay, this->ttd_ver_var_bit, 1, success ? 1 : 0);
+		}
+		if (!success) {
+			if (this->fallback_mode == GPMFM_ERROR_ON_DEFINITION) {
+				grfmsg(0, "Error: Unimplemented mapped %s: %s, mapped to: %X", this->descriptor, str, this->prop_id);
+				GRFError *error = DisableGrf(STR_NEWGRF_ERROR_UNIMPLEMETED_MAPPED_ACTION5_TYPE);
+				error->data = stredup(str);
+				error->param_value[1] = this->prop_id;
+			} else {
+				const char *str_store = stredup(str);
+				grfmsg(2, "Unimplemented mapped %s: %s, mapped to: %X, %s on use",
+						this->descriptor, str, this->prop_id, (this->fallback_mode == GPMFM_IGNORE) ? "ignoring" : "error");
+				_cur.grffile->remap_unknown_property_names.emplace_back(str_store);
+				Action5TypeRemapEntry &entry = _cur.grffile->action5_type_remaps.Entry(this->prop_id);
+				entry.name = str_store;
+				entry.info = nullptr;
+				entry.type_id = this->prop_id;
+				entry.fallback_mode = this->fallback_mode;
+			}
+		}
+	}
+};
+
+static GRFPropertyMapAction _current_grf_property_map_action;
+
+/** Callback function for ->'NAME' to set the name of the item to be mapped. */
+static bool ChangePropertyRemapName(byte langid, const char *str)
+{
+	_current_grf_property_map_action.name = str;
+	return true;
+}
+
+/** Callback function for ->'FEAT' to set which feature this mapping applies to. */
+static bool ChangePropertyRemapFeature(size_t len, ByteReader *buf)
+{
+	GRFPropertyMapAction &action = _current_grf_property_map_action;
+	if (len != 1) {
+		grfmsg(2, "Action 14 %s mapping: expected 1 byte for '%s'->'FEAT' but got " PRINTF_SIZE ", ignoring this field", action.descriptor, action.tag_name, len);
+		buf->Skip(len);
+	} else {
+		uint8 feature = buf->ReadByte();
+		if (feature >= GSF_END) {
+			grfmsg(2, "Action 14 %s mapping: invalid feature ID: %u, in '%s'->'FEAT', ignoring this field", action.descriptor, feature, action.tag_name);
+		} else {
+			action.feature = feature;
+		}
+	}
+	return true;
+}
+
+/** Callback function for ->'PROP' to set the property ID to which this item is being mapped. */
+static bool ChangePropertyRemapPropertyId(size_t len, ByteReader *buf)
+{
+	GRFPropertyMapAction &action = _current_grf_property_map_action;
+	if (len != 1) {
+		grfmsg(2, "Action 14 %s mapping: expected 1 byte for '%s'->'PROP' but got " PRINTF_SIZE ", ignoring this field", action.descriptor, action.tag_name, len);
+		buf->Skip(len);
+	} else {
+		action.prop_id = buf->ReadByte();
+	}
+	return true;
+}
+
+/** Callback function for ->'TYPE' to set the property ID to which this item is being mapped. */
+static bool ChangePropertyRemapTypeId(size_t len, ByteReader *buf)
+{
+	GRFPropertyMapAction &action = _current_grf_property_map_action;
+	if (len != 1) {
+		grfmsg(2, "Action 14 %s mapping: expected 1 byte for '%s'->'TYPE' but got " PRINTF_SIZE ", ignoring this field", action.descriptor, action.tag_name, len);
+		buf->Skip(len);
+	} else {
+		uint8 prop = buf->ReadByte();
+		if (prop < 128) {
+			action.prop_id = prop;
+		} else {
+			grfmsg(2, "Action 14 %s mapping: expected a type < 128 for '%s'->'TYPE' but got %u, ignoring this field", action.descriptor, action.tag_name, prop);
+		}
+	}
+	return true;
+}
+
+/** Callback function for ->'FLBK' to set the fallback mode. */
+static bool ChangePropertyRemapSetFallbackMode(size_t len, ByteReader *buf)
+{
+	GRFPropertyMapAction &action = _current_grf_property_map_action;
+	if (len != 1) {
+		grfmsg(2, "Action 14 %s mapping: expected 1 byte for '%s'->'FLBK' but got " PRINTF_SIZE ", ignoring this field", action.descriptor, action.tag_name, len);
+		buf->Skip(len);
+	} else {
+		GRFPropertyMapFallbackMode mode = (GRFPropertyMapFallbackMode) buf->ReadByte();
+		if (mode < GPMFM_END) action.fallback_mode = mode;
+	}
+	return true;
+}
+/** Callback function for ->'SETT' to set the bit number of global variable 8D (TTD version) to set/unset with whether the remapping was successful. */
+static bool ChangePropertyRemapSetTTDVerVarBit(size_t len, ByteReader *buf)
+{
+	GRFPropertyMapAction &action = _current_grf_property_map_action;
+	if (len != 1) {
+		grfmsg(2, "Action 14 %s mapping: expected 1 byte for '%s'->'SETT' but got " PRINTF_SIZE ", ignoring this field", action.descriptor, action.tag_name, len);
+		buf->Skip(len);
+	} else {
+		uint8 bit_number = buf->ReadByte();
+		if (bit_number >= 4 && bit_number <= 31) {
+			action.ttd_ver_var_bit = bit_number;
+		} else {
+			grfmsg(2, "Action 14 %s mapping: expected a bit number >= 4 and <= 32 for '%s'->'SETT' but got %u, ignoring this field", action.descriptor, action.tag_name, bit_number);
+		}
+	}
+	return true;
+}
+
+/** Action14 tags for the A0PM node */
+AllowedSubtags _tags_a0pm[] = {
+	AllowedSubtags('NAME', ChangePropertyRemapName),
+	AllowedSubtags('FEAT', ChangePropertyRemapFeature),
+	AllowedSubtags('PROP', ChangePropertyRemapPropertyId),
+	AllowedSubtags('FLBK', ChangePropertyRemapSetFallbackMode),
+	AllowedSubtags('SETT', ChangePropertyRemapSetTTDVerVarBit),
+	AllowedSubtags()
+};
+
+/**
+ * Callback function for 'A0PM' (action 0 property mapping)
+ */
+static bool HandleAction0PropertyMap(ByteReader *buf)
+{
+	_current_grf_property_map_action.Reset("A0PM", "property");
+	HandleNodes(buf, _tags_a0pm);
+	_current_grf_property_map_action.ExecutePropertyRemapping();
+	return true;
+}
+
+/** Action14 tags for the A5TM node */
+AllowedSubtags _tags_a5tm[] = {
+	AllowedSubtags('NAME', ChangePropertyRemapName),
+	AllowedSubtags('TYPE', ChangePropertyRemapTypeId),
+	AllowedSubtags('FLBK', ChangePropertyRemapSetFallbackMode),
+	AllowedSubtags('SETT', ChangePropertyRemapSetTTDVerVarBit),
+	AllowedSubtags()
+};
+
+/**
+ * Callback function for 'A5TM' (action 5 type mapping)
+ */
+static bool HandleAction5TypeMap(ByteReader *buf)
+{
+	_current_grf_property_map_action.Reset("A5TM", "Action 5 type");
+	HandleNodes(buf, _tags_a5tm);
+	_current_grf_property_map_action.ExecuteAction5TypeRemapping();
+	return true;
+}
+
 /** Action14 root tags */
-AllowedSubtags _tags_root[] = {
+AllowedSubtags _tags_root_static[] = {
 	AllowedSubtags('INFO', _tags_info),
+	AllowedSubtags('FTST', SkipInfoChunk),
+	AllowedSubtags('A0PM', SkipInfoChunk),
+	AllowedSubtags('A5TM', SkipInfoChunk),
+	AllowedSubtags()
+};
+
+/** Action14 root tags */
+AllowedSubtags _tags_root_feature_tests[] = {
+	AllowedSubtags('INFO', SkipInfoChunk),
+	AllowedSubtags('FTST', HandleFeatureTestInfo),
+	AllowedSubtags('A0PM', HandleAction0PropertyMap),
+	AllowedSubtags('A5TM', HandleAction5TypeMap),
 	AllowedSubtags()
 };
 
@@ -8288,13 +8840,23 @@ static bool HandleNodes(ByteReader *buf, AllowedSubtags subtags[])
 }
 
 /**
- * Handle Action 0x14
+ * Handle Action 0x14 (static info)
  * @param buf Buffer.
  */
 static void StaticGRFInfo(ByteReader *buf)
 {
 	/* <14> <type> <id> <text/data...> */
-	HandleNodes(buf, _tags_root);
+	HandleNodes(buf, _tags_root_static);
+}
+
+/**
+ * Handle Action 0x14 (feature tests)
+ * @param buf Buffer.
+ */
+static void Act14FeatureTest(ByteReader *buf)
+{
+	/* <14> <type> <id> <text/data...> */
+	HandleNodes(buf, _tags_root_feature_tests);
 }
 
 /**
@@ -8411,7 +8973,7 @@ static void ResetCustomStations()
 			delete[] statspec->renderdata;
 
 			/* Release platforms and layouts */
-			if (!statspec->copied_layouts) {
+			if (!HasBit(statspec->internal_flags, SSIF_COPIED_LAYOUTS)) {
 				for (uint l = 0; l < statspec->lengths; l++) {
 					for (uint p = 0; p < statspec->platforms[l]; p++) {
 						free(statspec->layouts[l][p]);
@@ -8840,7 +9402,7 @@ static void CalculateRefitMasks()
 		}
 
 		/* Clear invalid cargoslots (from default vehicles or pre-NewCargo GRFs) */
-		if (!HasBit(_cargo_mask, ei->cargo_type)) ei->cargo_type = CT_INVALID;
+		if (ei->cargo_type != CT_INVALID && !HasBit(_cargo_mask, ei->cargo_type)) ei->cargo_type = CT_INVALID;
 
 		/* Ensure that the vehicle is either not refittable, or that the default cargo is one of the refittable cargoes.
 		 * Note: Vehicles refittable to no cargo are handle differently to vehicle refittable to a single cargo. The latter might have subtypes. */
@@ -9268,7 +9830,7 @@ static void DecodeSpecialSprite(byte *buf, uint num, GrfLoadingStage stage)
 		/* 0x11 */ { SkipAct11,     GRFUnsafe,      SkipAct11,       GRFSound,        SkipAct11,         GRFSound, },
 		/* 0x12 */ { SkipAct12,     SkipAct12,      SkipAct12,       SkipAct12,       SkipAct12,         LoadFontGlyph, },
 		/* 0x13 */ { nullptr,       nullptr,        nullptr,         nullptr,         nullptr,           TranslateGRFStrings, },
-		/* 0x14 */ { StaticGRFInfo, nullptr,        nullptr,         nullptr,         nullptr,           nullptr, },
+		/* 0x14 */ { StaticGRFInfo, nullptr,        nullptr,         Act14FeatureTest,nullptr,           nullptr, },
 	};
 
 	GRFLocation location(_cur.grfconfig->ident.grfid, _cur.nfo_line);
@@ -9280,7 +9842,7 @@ static void DecodeSpecialSprite(byte *buf, uint num, GrfLoadingStage stage)
 		FioReadBlock(buf, num);
 	} else {
 		/* Use the preloaded sprite data. */
-		buf = _grf_line_to_action6_sprite_override[location];
+		buf = it->second;
 		grfmsg(7, "DecodeSpecialSprite: Using preloaded pseudo sprite data");
 
 		/* Skip the real (original) content of this action. */
@@ -9372,13 +9934,15 @@ void LoadNewGRFFile(GRFConfig *config, uint file_index, GrfLoadingStage stage, S
 		return;
 	}
 
-	FioOpenFile(file_index, filename, subdir);
+	free(config->full_filename);
+	config->full_filename = nullptr;
+	FioOpenFile(file_index, filename, subdir, &(config->full_filename));
 	_cur.file_index = file_index; // XXX
 	_palette_remap_grf[_cur.file_index] = (config->palette & GRFP_USE_MASK);
 
 	_cur.grfconfig = config;
 
-	DEBUG(grf, 2, "LoadNewGRFFile: Reading NewGRF-file '%s'", filename);
+	DEBUG(grf, 2, "LoadNewGRFFile: Reading NewGRF-file '%s'", config->GetDisplayPath());
 
 	_cur.grf_container_ver = GetGRFContainerVersion();
 	if (_cur.grf_container_ver == 0) {
@@ -9758,18 +10322,21 @@ void LoadNewGRF(uint load_index, uint file_index, uint num_baseset)
 	 * so all NewGRFs are loaded equally. For this we use the
 	 * start date of the game and we set the counters, etc. to
 	 * 0 so they're the same too. */
+	YearMonthDay date_ymd = _cur_date_ymd;
 	Date date            = _date;
-	Year year            = _cur_year;
 	DateFract date_fract = _date_fract;
 	uint16 tick_counter  = _tick_counter;
+	uint8 tick_skip_counter = _tick_skip_counter;
 	byte display_opt     = _display_opt;
 
 	if (_networking) {
-		_cur_year     = _settings_game.game_creation.starting_year;
-		_date         = ConvertYMDToDate(_cur_year, 0, 1);
+		_cur_date_ymd = { _settings_game.game_creation.starting_year, 0, 1};
+		_date         = ConvertYMDToDate(_cur_date_ymd);
 		_date_fract   = 0;
 		_tick_counter = 0;
+		_tick_skip_counter = 0;
 		_display_opt  = 0;
+		SetScaledTickVariables();
 	}
 
 	InitializeGRFSpecial();
@@ -9828,7 +10395,7 @@ void LoadNewGRF(uint load_index, uint file_index, uint num_baseset)
 			if (stage == GLS_LABELSCAN) InitNewGRFFile(c);
 
 			if (!HasBit(c->flags, GCF_STATIC) && !HasBit(c->flags, GCF_SYSTEM)) {
-				if (num_non_static == NETWORK_MAX_GRF_COUNT) {
+				if (slot == MAX_FILE_SLOTS) {
 					DEBUG(grf, 0, "'%s' is not loaded as the maximum number of non-static GRFs has been reached", c->filename);
 					c->status = GCS_DISABLED;
 					c->error  = new GRFError(STR_NEWGRF_ERROR_MSG_FATAL, STR_NEWGRF_ERROR_TOO_MANY_NEWGRFS_LOADED);
@@ -9859,9 +10426,25 @@ void LoadNewGRF(uint load_index, uint file_index, uint num_baseset)
 	AfterLoadGRFs();
 
 	/* Now revert back to the original situation */
-	_cur_year     = year;
+	_cur_date_ymd = date_ymd;
 	_date         = date;
 	_date_fract   = date_fract;
 	_tick_counter = tick_counter;
+	_tick_skip_counter = tick_skip_counter;
 	_display_opt  = display_opt;
+	SetScaledTickVariables();
+}
+
+/**
+ * Returns amount of user selected NewGRFs files.
+ */
+uint CountSelectedGRFs(GRFConfig *grfconf)
+{
+	uint i = 0;
+
+	/* Find last entry in the list */
+	for (const GRFConfig *list = grfconf; list != nullptr; list = list->next) {
+		if (!HasBit(list->flags, GCF_STATIC) && !HasBit(list->flags, GCF_SYSTEM)) i++;
+	}
+	return i;
 }

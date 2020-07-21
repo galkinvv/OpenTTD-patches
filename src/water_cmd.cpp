@@ -122,13 +122,13 @@ CommandCost CmdBuildShipDepot(TileIndex tile, DoCommandFlag flags, uint32 p1, ui
 	CommandCost cost = CommandCost(EXPENSES_CONSTRUCTION, _price[PR_BUILD_DEPOT_SHIP]);
 
 	bool add_cost = !IsWaterTile(tile);
-	CommandCost ret = DoCommand(tile, 0, 0, flags | DC_AUTO, CMD_LANDSCAPE_CLEAR);
+	CommandCost ret = DoCommand(tile, 0, 0, flags | DC_AUTO | DC_ALLOW_REMOVE_WATER, CMD_LANDSCAPE_CLEAR);
 	if (ret.Failed()) return ret;
 	if (add_cost) {
 		cost.AddCost(ret);
 	}
 	add_cost = !IsWaterTile(tile2);
-	ret = DoCommand(tile2, 0, 0, flags | DC_AUTO, CMD_LANDSCAPE_CLEAR);
+	ret = DoCommand(tile2, 0, 0, flags | DC_AUTO | DC_ALLOW_REMOVE_WATER, CMD_LANDSCAPE_CLEAR);
 	if (ret.Failed()) return ret;
 	if (add_cost) {
 		cost.AddCost(ret);
@@ -186,13 +186,16 @@ void CheckForDockingTile(TileIndex t)
 		if (!IsValidTile(tile)) continue;
 
 		if (IsDockTile(tile) && IsValidDockingDirectionForDock(tile, d)) {
-			Station::GetByTile(tile)->docking_station.Add(t);
+			Station *st = Station::GetByTile(tile);
+			st->docking_station.Add(t);
+			st->docking_tiles.push_back(t);
 			SetDockingTile(t, true);
 		}
 		if (IsTileType(tile, MP_INDUSTRY)) {
 			Station *st = Industry::GetByTile(tile)->neutral_station;
 			if (st != nullptr) {
 				st->docking_station.Add(t);
+				st->docking_tiles.push_back(t);
 				SetDockingTile(t, true);
 			}
 		}
@@ -437,7 +440,9 @@ bool RiverModifyDesertZone(TileIndex tile, void *)
  * @param tile end tile of stretch-dragging
  * @param flags type of operation
  * @param p1 start tile of stretch-dragging
- * @param p2 waterclass to build. sea and river can only be built in scenario editor
+ * @param p2 various bitstuffed data
+ *  bits  0-1: waterclass to build. sea and river can only be built in scenario editor, unless enable_build_river is enabled
+ *  bit     2: Whether to use the Orthogonal (0) or Diagonal (1) iterator.
  * @param text unused
  * @return the cost of this operation or an error
  */
@@ -447,15 +452,28 @@ CommandCost CmdBuildCanal(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32
 	if (p1 >= MapSize() || wc == WATER_CLASS_INVALID) return CMD_ERROR;
 
 	/* Outside of the editor you can only build canals, not oceans */
-	if (wc != WATER_CLASS_CANAL && _game_mode != GM_EDITOR) return CMD_ERROR;
-
-	TileArea ta(tile, p1);
+	if (_game_mode != GM_EDITOR) {
+		if (HasBit(p2, 2)) return CMD_ERROR;
+		if (wc == WATER_CLASS_RIVER) {
+			if (!_settings_game.construction.enable_build_river && _current_company != OWNER_DEITY) {
+				return CMD_ERROR;
+			}
+		} else if (wc != WATER_CLASS_CANAL) {
+			return CMD_ERROR;
+		}
+	}
 
 	/* Outside the editor you can only drag canals, and not areas */
-	if (_game_mode != GM_EDITOR && ta.w != 1 && ta.h != 1) return CMD_ERROR;
+	if (_game_mode != GM_EDITOR) {
+		TileArea ta(tile, p1);
+		if (ta.w != 1 && ta.h != 1) return CMD_ERROR;
+	}
 
 	CommandCost cost(EXPENSES_CONSTRUCTION);
-	TILE_AREA_LOOP(tile, ta) {
+
+	TileIterator *iter = HasBit(p2, 2) ? (TileIterator *)new DiagonalTileIterator(tile, p1) : new OrthogonalTileIterator(tile, p1);
+	for (; *iter != INVALID_TILE; ++(*iter)) {
+		TileIndex tile = *iter;
 		CommandCost ret;
 
 		Slope slope = GetTileSlope(tile);
@@ -503,6 +521,9 @@ CommandCost CmdBuildCanal(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32
 		}
 
 		cost.AddCost(_price[PR_BUILD_CANAL]);
+		if (wc == WATER_CLASS_RIVER) {
+			cost.AddCost(_price[PR_BUILD_CANAL] * 3);
+		}
 	}
 
 	if (cost.GetCost() == 0) {
@@ -517,6 +538,11 @@ static CommandCost ClearTile_Water(TileIndex tile, DoCommandFlag flags)
 	switch (GetWaterTileType(tile)) {
 		case WATER_TILE_CLEAR: {
 			if (flags & DC_NO_WATER) return_cmd_error(STR_ERROR_CAN_T_BUILD_ON_WATER);
+
+			if (!IsCanal(tile) && _game_mode != GM_EDITOR && !_settings_game.construction.enable_remove_water && !(flags & DC_ALLOW_REMOVE_WATER)
+					&& _current_company != OWNER_WATER) {
+				return_cmd_error(STR_ERROR_CAN_T_BUILD_ON_WATER);
+			}
 
 			Money base_cost = IsCanal(tile) ? _price[PR_CLEAR_CANAL] : _price[PR_CLEAR_WATER];
 			/* Make sure freeform edges are allowed or it's not an edge tile. */
@@ -556,17 +582,19 @@ static CommandCost ClearTile_Water(TileIndex tile, DoCommandFlag flags)
 			CommandCost ret = EnsureNoVehicleOnGround(tile);
 			if (ret.Failed()) return ret;
 
+			if (IsSlopeWithOneCornerRaised(slope)) {
+				if (_game_mode != GM_EDITOR && !_settings_game.construction.enable_remove_water && !(flags & DC_ALLOW_REMOVE_WATER)) return_cmd_error(STR_ERROR_CAN_T_BUILD_ON_WATER);
+				ret = CommandCost(EXPENSES_CONSTRUCTION, _price[PR_CLEAR_WATER]);
+			} else {
+				ret = CommandCost(EXPENSES_CONSTRUCTION, _price[PR_CLEAR_ROUGH]);
+			}
 			if (flags & DC_EXEC) {
 				bool remove = IsDockingTile(tile);
 				DoClearSquare(tile);
 				MarkCanalsAndRiversAroundDirty(tile);
 				if (remove) RemoveDockingTile(tile);
 			}
-			if (IsSlopeWithOneCornerRaised(slope)) {
-				return CommandCost(EXPENSES_CONSTRUCTION, _price[PR_CLEAR_WATER]);
-			} else {
-				return CommandCost(EXPENSES_CONSTRUCTION, _price[PR_CLEAR_ROUGH]);
-			}
+			return ret;
 		}
 
 		case WATER_TILE_LOCK: {
@@ -621,7 +649,7 @@ bool IsWateredTile(TileIndex tile, Direction from)
 
 		case MP_RAILWAY:
 			if (GetRailGroundType(tile) == RAIL_GROUND_WATER) {
-				assert(IsPlainRail(tile));
+				assert_tile(IsPlainRail(tile), tile);
 				switch (GetTileSlope(tile)) {
 					case SLOPE_W: return (from == DIR_SE) || (from == DIR_E) || (from == DIR_NE);
 					case SLOPE_S: return (from == DIR_NE) || (from == DIR_N) || (from == DIR_NW);
@@ -896,16 +924,16 @@ void DrawWaterClassGround(const TileInfo *ti)
 	}
 }
 
-static void DrawTile_Water(TileInfo *ti)
+static void DrawTile_Water(TileInfo *ti, DrawTileProcParams params)
 {
 	switch (GetWaterTileType(ti->tile)) {
 		case WATER_TILE_CLEAR:
-			DrawWaterClassGround(ti);
+			if (!params.no_ground_tiles) DrawWaterClassGround(ti);
 			DrawBridgeMiddle(ti);
 			break;
 
 		case WATER_TILE_COAST: {
-			DrawShoreTile(ti->tileh);
+			if (!params.no_ground_tiles) DrawShoreTile(ti->tileh);
 			DrawBridgeMiddle(ti);
 			break;
 		}
@@ -988,37 +1016,46 @@ static void FloodVehicle(Vehicle *v)
  * @param data The z of level to flood.
  * @return nullptr as we always want to remove everything.
  */
+static Vehicle *FloodAircraftProc(Vehicle *v, void *data)
+{
+	if ((v->vehstatus & VS_CRASHED) != 0) return nullptr;
+
+	if (!IsAirportTile(v->tile) || GetTileMaxZ(v->tile) != 0) return nullptr;
+	if (v->subtype == AIR_SHADOW) return nullptr;
+
+	/* We compare v->z_pos against delta_z + 1 because the shadow
+	 * is at delta_z and the actual aircraft at delta_z + 1. */
+	const Station *st = Station::GetByTile(v->tile);
+	const AirportFTAClass *airport = st->airport.GetFTA();
+	if (v->z_pos != airport->delta_z + 1) return nullptr;
+
+	FloodVehicle(v);
+
+	return nullptr;
+}
+
+/**
+ * Flood a vehicle if we are allowed to flood it, i.e. when it is on the ground.
+ * @param v    The vehicle to test for flooding.
+ * @param data The z of level to flood.
+ * @return nullptr as we always want to remove everything.
+ */
 static Vehicle *FloodVehicleProc(Vehicle *v, void *data)
 {
 	if ((v->vehstatus & VS_CRASHED) != 0) return nullptr;
 
-	switch (v->type) {
-		default: break;
-
-		case VEH_AIRCRAFT: {
-			if (!IsAirportTile(v->tile) || GetTileMaxZ(v->tile) != 0) break;
-			if (v->subtype == AIR_SHADOW) break;
-
-			/* We compare v->z_pos against delta_z + 1 because the shadow
-			 * is at delta_z and the actual aircraft at delta_z + 1. */
-			const Station *st = Station::GetByTile(v->tile);
-			const AirportFTAClass *airport = st->airport.GetFTA();
-			if (v->z_pos != airport->delta_z + 1) break;
-
-			FloodVehicle(v);
-			break;
-		}
-
-		case VEH_TRAIN:
-		case VEH_ROAD: {
-			int z = *(int*)data;
-			if (v->z_pos > z) break;
-			FloodVehicle(v->First());
-			break;
-		}
-	}
+	int z = static_cast<int>(reinterpret_cast<intptr_t>(data));
+	if (v->z_pos > z) return nullptr;
+	FloodVehicle(v->First());
 
 	return nullptr;
+}
+
+static void FindFloodVehicle(TileIndex tile, int z)
+{
+	FindVehicleOnPos(tile, VEH_AIRCRAFT, reinterpret_cast<void *>(static_cast<intptr_t>(z)), &FloodAircraftProc);
+	FindVehicleOnPos(tile, VEH_TRAIN, reinterpret_cast<void *>(static_cast<intptr_t>(z)), &FloodVehicleProc);
+	FindVehicleOnPos(tile, VEH_ROAD, reinterpret_cast<void *>(static_cast<intptr_t>(z)), &FloodVehicleProc);
 }
 
 /**
@@ -1033,7 +1070,7 @@ static void FloodVehicles(TileIndex tile)
 	if (IsAirportTile(tile)) {
 		const Station *st = Station::GetByTile(tile);
 		TILE_AREA_LOOP(tile, st->airport) {
-			if (st->TileBelongsToAirport(tile)) FindVehicleOnPos(tile, &z, &FloodVehicleProc);
+			if (st->TileBelongsToAirport(tile)) FindFloodVehicle(tile, z);
 		}
 
 		/* No vehicle could be flooded on this airport anymore */
@@ -1041,15 +1078,15 @@ static void FloodVehicles(TileIndex tile)
 	}
 
 	if (!IsBridgeTile(tile)) {
-		FindVehicleOnPos(tile, &z, &FloodVehicleProc);
+		FindFloodVehicle(tile, z);
 		return;
 	}
 
 	TileIndex end = GetOtherBridgeEnd(tile);
 	z = GetBridgePixelHeight(tile);
 
-	FindVehicleOnPos(tile, &z, &FloodVehicleProc);
-	FindVehicleOnPos(end, &z, &FloodVehicleProc);
+	FindFloodVehicle(tile, z);
+	FindFloodVehicle(end, z);
 }
 
 /**
@@ -1095,7 +1132,7 @@ FloodingBehaviour GetFloodingBehaviour(TileIndex tile)
  */
 void DoFloodTile(TileIndex target)
 {
-	assert(!IsTileType(target, MP_WATER));
+	assert_tile(!IsTileType(target, MP_WATER), target);
 
 	bool flooded = false; // Will be set to true if something is changed.
 
@@ -1166,8 +1203,8 @@ static void DoDryUp(TileIndex tile)
 
 	switch (GetTileType(tile)) {
 		case MP_RAILWAY:
-			assert(IsPlainRail(tile));
-			assert(GetRailGroundType(tile) == RAIL_GROUND_WATER);
+			assert_tile(IsPlainRail(tile), tile);
+			assert_tile(GetRailGroundType(tile) == RAIL_GROUND_WATER, tile);
 
 			RailGroundType new_ground;
 			switch (GetTrackBits(tile)) {
@@ -1183,11 +1220,11 @@ static void DoDryUp(TileIndex tile)
 
 		case MP_TREES:
 			SetTreeGroundDensity(tile, TREE_GROUND_GRASS, 3);
-			MarkTileDirtyByTile(tile);
+			MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 			break;
 
 		case MP_WATER:
-			assert(IsCoast(tile));
+			assert_tile(IsCoast(tile), tile);
 
 			if (DoCommand(tile, 0, 0, DC_EXEC, CMD_LANDSCAPE_CLEAR).Succeeded()) {
 				MakeClear(tile, CLEAR_GRASS, 3);

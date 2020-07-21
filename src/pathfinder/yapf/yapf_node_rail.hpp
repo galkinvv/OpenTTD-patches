@@ -126,12 +126,17 @@ struct CYapfRailNodeT
 
 	CYapfRailSegment *m_segment;
 	uint16            m_num_signals_passed;
+	uint16            m_num_signals_res_through_passed;
+	TileIndex         m_last_non_reserve_through_signal_tile;
+	Trackdir          m_last_non_reserve_through_signal_td;
 	union {
 		uint32          m_inherited_flags;
 		struct {
 			bool          m_targed_seen : 1;
 			bool          m_choice_seen : 1;
 			bool          m_last_signal_was_red : 1;
+			bool          m_reverse_pending : 1;
+			bool          m_teleport : 1;
 		} flags_s;
 	} flags_u;
 	SignalType        m_last_red_signal_type;
@@ -143,6 +148,9 @@ struct CYapfRailNodeT
 		m_segment = nullptr;
 		if (parent == nullptr) {
 			m_num_signals_passed      = 0;
+			m_num_signals_res_through_passed = 0;
+			m_last_non_reserve_through_signal_tile = INVALID_TILE;
+			m_last_non_reserve_through_signal_td = INVALID_TRACKDIR;
 			flags_u.m_inherited_flags = 0;
 			m_last_red_signal_type    = SIGTYPE_NORMAL;
 			/* We use PBS as initial signal type because if we are in
@@ -158,11 +166,15 @@ struct CYapfRailNodeT
 			m_last_signal_type        = SIGTYPE_PBS;
 		} else {
 			m_num_signals_passed      = parent->m_num_signals_passed;
+			m_num_signals_res_through_passed = parent->m_num_signals_res_through_passed;
+			m_last_non_reserve_through_signal_tile = parent->m_last_non_reserve_through_signal_tile;
+			m_last_non_reserve_through_signal_td = parent->m_last_non_reserve_through_signal_td;
 			flags_u.m_inherited_flags = parent->flags_u.m_inherited_flags;
 			m_last_red_signal_type    = parent->m_last_red_signal_type;
 			m_last_signal_type        = parent->m_last_signal_type;
 		}
 		flags_u.flags_s.m_choice_seen |= is_choice;
+		flags_u.flags_s.m_teleport = false;
 	}
 
 	inline TileIndex GetLastTile() const
@@ -208,6 +220,7 @@ struct CYapfRailNodeT
 		base::Dump(dmp);
 		dmp.WriteStructT("m_segment", m_segment);
 		dmp.WriteLine("m_num_signals_passed = %d", m_num_signals_passed);
+		dmp.WriteLine("m_num_signals_res_through_passed = %d", m_num_signals_res_through_passed);
 		dmp.WriteLine("m_targed_seen = %s", flags_u.flags_s.m_targed_seen ? "Yes" : "No");
 		dmp.WriteLine("m_choice_seen = %s", flags_u.flags_s.m_choice_seen ? "Yes" : "No");
 		dmp.WriteLine("m_last_signal_was_red = %s", flags_u.flags_s.m_last_signal_was_red ? "Yes" : "No");

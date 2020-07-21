@@ -61,18 +61,25 @@ struct TileDesc {
 	const char *grf;            ///< newGRF used for the tile contents
 	uint64 dparam[2];           ///< Parameters of the \a str string
 	StringID railtype;          ///< Type of rail on the tile.
+	StringID railtype2;         ///< Type of second rail on the tile.
 	uint16 rail_speed;          ///< Speed limit of rail (bridges and track)
+	uint16 rail_speed2;         ///< Speed limit of second rail (bridges and track)
 	StringID roadtype;          ///< Type of road on the tile.
 	uint16 road_speed;          ///< Speed limit of road (bridges and track)
 	StringID tramtype;          ///< Type of tram on the tile.
 	uint16 tram_speed;          ///< Speed limit of tram (bridges and track)
 };
 
+struct DrawTileProcParams {
+	int min_visible_height;
+	bool no_ground_tiles;
+};
+
 /**
  * Tile callback function signature for drawing a tile and its contents to the screen
  * @param ti Information about the tile to draw
  */
-typedef void DrawTileProc(TileInfo *ti);
+typedef void DrawTileProc(TileInfo *ti, DrawTileProcParams params);
 typedef int GetSlopeZProc(TileIndex tile, uint x, uint y);
 typedef CommandCost ClearTileProc(TileIndex tile, DoCommandFlag flags);
 
@@ -179,13 +186,6 @@ static inline void AddProducedCargo(TileIndex tile, CargoArray &produced)
 	AddProducedCargoProc *proc = _tile_type_procs[GetTileType(tile)]->add_produced_cargo_proc;
 	if (proc == nullptr) return;
 	proc(tile, produced);
-}
-
-static inline void AnimateTile(TileIndex tile)
-{
-	AnimateTileProc *proc = _tile_type_procs[GetTileType(tile)]->animate_tile_proc;
-	assert(proc != nullptr);
-	proc(tile);
 }
 
 static inline bool ClickTile(TileIndex tile)

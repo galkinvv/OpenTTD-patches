@@ -12,6 +12,8 @@
 
 #include "core/enum_type.hpp"
 
+extern uint32 _road_layout_change_counter;
+
 typedef uint32 RoadTypeLabel;
 
 /**

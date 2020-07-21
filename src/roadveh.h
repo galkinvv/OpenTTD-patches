@@ -85,6 +85,7 @@ void GetRoadVehSpriteSize(EngineID engine, uint &width, uint &height, int &xoffs
 struct RoadVehPathCache {
 	std::deque<Trackdir> td;
 	std::deque<TileIndex> tile;
+	uint32 layout_ctr;
 
 	inline bool empty() const { return this->td.empty(); }
 
@@ -117,6 +118,8 @@ struct RoadVehicle FINAL : public GroundVehicle<RoadVehicle, VEH_ROAD> {
 	RoadType roadtype;              //!< Roadtype of this vehicle.
 	RoadTypes compatible_roadtypes; //!< Roadtypes this consist is powered on.
 
+	byte critical_breakdown_count; ///< Counter for the number of critical breakdowns since last service
+
 	/** We don't want GCC to zero our struct! It already is zeroed and has an index! */
 	RoadVehicle() : GroundVehicleBase() {}
 	/** We want to 'destruct' the right class. */
@@ -144,8 +147,36 @@ struct RoadVehicle FINAL : public GroundVehicle<RoadVehicle, VEH_ROAD> {
 	bool IsBus() const;
 
 	int GetCurrentMaxSpeed() const;
+	int GetEffectiveMaxSpeed() const;
+	int GetDisplayEffectiveMaxSpeed() const { return this->GetEffectiveMaxSpeed() / 2; }
 	int UpdateSpeed();
 	void SetDestTile(TileIndex tile);
+
+	inline bool IsRoadVehicleOnLevelCrossing() const
+	{
+		for (const RoadVehicle *u = this; u != nullptr; u = u->Next()) {
+			if (IsLevelCrossingTile(u->tile)) return true;
+		}
+		return false;
+	}
+
+	inline bool IsRoadVehicleStopped() const
+	{
+		if (!(this->vehstatus & VS_STOPPED)) return false;
+		return !this->IsRoadVehicleOnLevelCrossing();
+	}
+
+	inline uint GetOvertakingCounterThreshold() const
+	{
+		return RV_OVERTAKE_TIMEOUT + (this->gcache.cached_total_length / 2) - (VEHICLE_LENGTH / 2);
+	}
+
+	inline void SetRoadVehicleOvertaking(byte overtaking)
+	{
+		for (RoadVehicle *u = this; u != nullptr; u = u->Next()) {
+			u->overtaking = overtaking;
+		}
+	}
 
 protected: // These functions should not be called outside acceleration code.
 
@@ -184,6 +215,11 @@ protected: // These functions should not be called outside acceleration code.
 		if (!this->IsArticulatedPart()) {
 			/* Road vehicle weight is in units of 1/4 t. */
 			weight += GetVehicleProperty(this, PROP_ROADVEH_WEIGHT, RoadVehInfo(this->engine_type)->weight) / 4;
+
+			/*
+			 * TODO: DIRTY HACK: at least 1 for realistic accelerate
+			 */
+			if (weight == 0) weight = 1;
 		}
 
 		return weight;
@@ -223,7 +259,7 @@ protected: // These functions should not be called outside acceleration code.
 	 */
 	inline AccelStatus GetAccelerationStatus() const
 	{
-		return (this->vehstatus & VS_STOPPED) ? AS_BRAKE : AS_ACCEL;
+		return this->IsRoadVehicleStopped() ? AS_BRAKE : AS_ACCEL;
 	}
 
 	/**

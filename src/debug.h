@@ -12,6 +12,7 @@
 
 #include "cpu.h"
 #include <chrono>
+#include <string>
 
 /* Debugging messages policy:
  * These should be the severities used for direct DEBUG() calls
@@ -48,10 +49,18 @@ extern int _debug_script_level;
 extern int _debug_sl_level;
 extern int _debug_gamelog_level;
 extern int _debug_desync_level;
+extern int _debug_yapfdesync_level;
 extern int _debug_console_level;
+extern int _debug_linkgraph_level;
+extern int _debug_sound_level;
 #ifdef RANDOM_DEBUG
 extern int _debug_random_level;
 #endif
+
+extern const char *_savegame_DBGL_data;
+extern std::string _loadgame_DBGL_data;
+extern bool _save_DBGC_data;
+extern std::string _loadgame_DBGC_data;
 
 void CDECL debug(const char *dbg, const char *format, ...) WARN_FORMAT(2, 3);
 
@@ -123,5 +132,9 @@ const char *GetLogPrefix();
 
 /** The real time in the game. */
 extern uint32 _realtime_tick;
+
+void ClearDesyncMsgLog();
+void LogDesyncMsg(std::string msg);
+char *DumpDesyncMsgLog(char *buffer, const char *last);
 
 #endif /* DEBUG_H */

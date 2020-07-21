@@ -96,6 +96,7 @@ struct Pool : PoolBase {
 	bool cleaning;       ///< True if cleaning pool (deleting all items)
 
 	Titem **data;        ///< Pointer to array of pointers to Titem
+	uint64 *free_bitmap; ///< Pointer to free bitmap
 
 	Pool(const char *name);
 	virtual void CleanPool();
@@ -108,7 +109,7 @@ struct Pool : PoolBase {
 	 */
 	inline Titem *Get(size_t index)
 	{
-		assert(index < this->first_unused);
+		assert_msg(index < this->first_unused, "index: " PRINTF_SIZE ", first_unused: " PRINTF_SIZE ", name: %s", index, this->first_unused, this->name);
 		return this->data[index];
 	}
 
@@ -249,7 +250,7 @@ struct Pool : PoolBase {
 		{
 			if (p == nullptr) return;
 			Titem *pn = (Titem *)p;
-			assert(pn == Tpool->Get(pn->index));
+			assert_msg(pn == Tpool->Get(pn->index), "name: %s", Tpool->name);
 			Tpool->FreeItem(pn->index);
 		}
 
@@ -283,7 +284,7 @@ struct Pool : PoolBase {
 				 * memory are the same (because of possible inheritance).
 				 * Use { size_t index = item->index; delete item; new (index) item; }
 				 * instead to make sure destructor is called and no memory leaks. */
-				assert(ptr != Tpool->data[i]);
+				assert_msg(ptr != Tpool->data[i], "name: %s", Tpool->name);
 			}
 			return ptr;
 		}
@@ -369,6 +370,13 @@ struct Pool : PoolBase {
 		 * @note it's called only when !CleaningPool()
 		 */
 		static inline void PostDestructor(size_t index) { }
+
+		/**
+		 * Dummy function called before a pool is about to be cleaned.
+		 * If you want to use it, override it in PoolItem's subclass.
+		 * @note it's called only when CleaningPool()
+		 */
+		static inline void PreCleanPool() { }
 
 		/**
 		 * Returns an iterable ensemble of all valid Titem

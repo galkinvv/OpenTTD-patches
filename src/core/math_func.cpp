@@ -56,7 +56,7 @@ int GreatestCommonDivisor(int a, int b)
  */
 int DivideApprox(int a, int b)
 {
-	int random_like = ((a + b) * (a - b)) % b;
+	int random_like = (((int64) (a + b)) * ((int64) (a - b))) % b;
 
 	int remainder = a % b;
 

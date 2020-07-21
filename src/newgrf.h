@@ -14,9 +14,12 @@
 #include "rail_type.h"
 #include "road_type.h"
 #include "fileio_type.h"
+#include "debug.h"
 #include "core/bitmath_func.hpp"
 #include "core/alloc_type.hpp"
 #include "core/smallvec_type.hpp"
+#include "3rdparty/cpp-btree/btree_map.h"
+#include <bitset>
 
 /**
  * List of different canal 'features'.
@@ -87,6 +90,7 @@ enum GrfSpecFeature {
 	GSF_END,
 
 	GSF_FAKE_TOWNS = GSF_END, ///< Fake town GrfSpecFeature for NewGRF debugging (parent scope)
+	GSF_FAKE_STATION_STRUCT,  ///< Fake station struct GrfSpecFeature for NewGRF debugging
 	GSF_FAKE_END,             ///< End of the fake features
 
 	GSF_INVALID = 0xFF,       ///< An invalid spec feature
@@ -99,6 +103,110 @@ struct GRFLabel {
 	uint32 nfo_line;
 	size_t pos;
 	struct GRFLabel *next;
+};
+
+enum Action0RemapPropertyIds {
+	A0RPI_CHECK_PROPERTY_LENGTH = 0x10000,
+	A0RPI_UNKNOWN_IGNORE = 0x200,
+	A0RPI_UNKNOWN_ERROR,
+
+	A0RPI_STATION_MIN_BRIDGE_HEIGHT,
+	A0RPI_STATION_DISALLOWED_BRIDGE_PILLARS,
+	A0RPI_BRIDGE_MENU_ICON,
+	A0RPI_BRIDGE_PILLAR_FLAGS,
+};
+
+enum GRFPropertyMapFallbackMode {
+	GPMFM_IGNORE,
+	GPMFM_ERROR_ON_USE,
+	GPMFM_ERROR_ON_DEFINITION,
+	GPMFM_END,
+};
+
+struct GRFPropertyMapDefinition {
+	const char *name; // nullptr indicates the end of the list
+	int id;
+	uint8 feature;
+
+	/** Create empty object used to identify the end of a list. */
+	GRFPropertyMapDefinition() :
+		name(nullptr),
+		id(0),
+		feature(0)
+	{}
+
+	GRFPropertyMapDefinition(uint8 feature, int id, const char *name) :
+		name(name),
+		id(id),
+		feature(feature)
+	{}
+};
+
+struct GRFFilePropertyRemapEntry {
+	const char *name = nullptr;
+	int id = 0;
+	uint8 feature = 0;
+	uint8 property_id = 0;
+};
+
+struct GRFFilePropertyRemapSet {
+	std::bitset<256> remapped_ids;
+	btree::btree_map<uint8, GRFFilePropertyRemapEntry> mapping;
+
+	GRFFilePropertyRemapEntry &Entry(uint8 property)
+	{
+		this->remapped_ids.set(property);
+		return this->mapping[property];
+	}
+};
+
+/** The type of action 5 type. */
+enum Action5BlockType {
+	A5BLOCK_FIXED,                ///< Only allow replacing a whole block of sprites. (TTDP compatible)
+	A5BLOCK_ALLOW_OFFSET,         ///< Allow replacing any subset by specifiing an offset.
+	A5BLOCK_INVALID,              ///< unknown/not-implemented type
+};
+/** Information about a single action 5 type. */
+struct Action5Type {
+	Action5BlockType block_type;  ///< How is this Action5 type processed?
+	SpriteID sprite_base;         ///< Load the sprites starting from this sprite.
+	uint16 min_sprites;           ///< If the Action5 contains less sprites, the whole block will be ignored.
+	uint16 max_sprites;           ///< If the Action5 contains more sprites, only the first max_sprites sprites will be used.
+	const char *name;             ///< Name for error messages.
+};
+
+struct Action5TypeRemapDefinition {
+	const char *name; // nullptr indicates the end of the list
+	const Action5Type info;
+
+	/** Create empty object used to identify the end of a list. */
+	Action5TypeRemapDefinition() :
+		name(nullptr),
+		info({ A5BLOCK_INVALID, 0, 0, 0, nullptr })
+	{}
+
+	Action5TypeRemapDefinition(const char *type_name, Action5BlockType block_type, SpriteID sprite_base, uint16 min_sprites, uint16 max_sprites, const char *info_name) :
+		name(type_name),
+		info({ block_type, sprite_base, min_sprites, max_sprites, info_name })
+	{}
+};
+
+struct Action5TypeRemapEntry {
+	const Action5Type *info = nullptr;
+	const char *name = nullptr;
+	uint8 type_id = 0;
+	GRFPropertyMapFallbackMode fallback_mode = GPMFM_IGNORE;
+};
+
+struct Action5TypeRemapSet {
+	std::bitset<256> remapped_ids;
+	btree::btree_map<uint8, Action5TypeRemapEntry> mapping;
+
+	Action5TypeRemapEntry &Entry(uint8 property)
+	{
+		this->remapped_ids.set(property);
+		return this->mapping[property];
+	}
 };
 
 /** Dynamic data of a loaded NewGRF */
@@ -117,6 +225,10 @@ struct GRFFile : ZeroedMemoryAllocator {
 	struct ObjectSpec **objectspec;
 	struct AirportSpec **airportspec;
 	struct AirportTileSpec **airtspec;
+
+	GRFFilePropertyRemapSet action0_property_remaps[GSF_END];
+	Action5TypeRemapSet action5_type_remaps;
+	std::vector<std::unique_ptr<const char, FreeDeleter>> remap_unknown_property_names;
 
 	uint32 param[0x80];
 	uint param_end;  ///< one more than the highest set parameter
@@ -144,6 +256,9 @@ struct GRFFile : ZeroedMemoryAllocator {
 
 	uint32 grf_features;                     ///< Bitset of GrfSpecFeature the grf uses
 	PriceMultipliers price_base_multipliers; ///< Price base multipliers as set by the grf.
+
+	uint32 var8D_overlay;                    ///< Overlay for global variable 8D (action 0x14)
+	uint32 var9D_overlay;                    ///< Overlay for global variable 9D (action 0x14)
 
 	GRFFile(const struct GRFConfig *config);
 	~GRFFile();
@@ -200,11 +315,15 @@ void ReloadNewGRFData(); // in saveload/afterload.cpp
 void ResetNewGRFData();
 void ResetPersistentNewGRFData();
 
-void CDECL grfmsg(int severity, const char *str, ...) WARN_FORMAT(2, 3);
+#define grfmsg(severity, ...) if ((severity) == 0 || _debug_grf_level >= (severity)) _intl_grfmsg(severity, __VA_ARGS__)
+void CDECL _intl_grfmsg(int severity, const char *str, ...) WARN_FORMAT(2, 3);
 
 bool GetGlobalVariable(byte param, uint32 *value, const GRFFile *grffile);
 
 StringID MapGRFStringID(uint32 grfid, StringID str);
 void ShowNewGRFError();
+uint CountSelectedGRFs(GRFConfig *grfconf);
+
+struct TemplateVehicle;
 
 #endif /* NEWGRF_H */

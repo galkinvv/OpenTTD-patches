@@ -167,7 +167,7 @@ NetworkRecvStatus ServerNetworkAdminSocketHandler::SendWelcome()
 	Packet *p = new Packet(ADMIN_PACKET_SERVER_WELCOME);
 
 	p->Send_string(_settings_client.network.server_name);
-	p->Send_string(GetNetworkRevisionString());
+	p->Send_string(_openttd_revision);
 	p->Send_bool  (_network_dedicated);
 
 	p->Send_string(_network_game_info.map_name);
@@ -465,7 +465,7 @@ NetworkRecvStatus ServerNetworkAdminSocketHandler::SendCompanyStats()
  * @param msg The actual message.
  * @param data Arbitrary extra data.
  */
-NetworkRecvStatus ServerNetworkAdminSocketHandler::SendChat(NetworkAction action, DestType desttype, ClientID client_id, const char *msg, int64 data)
+NetworkRecvStatus ServerNetworkAdminSocketHandler::SendChat(NetworkAction action, DestType desttype, ClientID client_id, const char *msg, NetworkTextMessageData data)
 {
 	Packet *p = new Packet(ADMIN_PACKET_SERVER_CHAT);
 
@@ -473,7 +473,7 @@ NetworkRecvStatus ServerNetworkAdminSocketHandler::SendChat(NetworkAction action
 	p->Send_uint8 (desttype);
 	p->Send_uint32(client_id);
 	p->Send_string(msg);
-	p->Send_uint64(data);
+	data.send(p);
 
 	this->SendPacket(p);
 	return NETWORK_RECV_STATUS_OKAY;
@@ -647,7 +647,7 @@ NetworkRecvStatus ServerNetworkAdminSocketHandler::SendCmdLogging(ClientID clien
 	p->Send_uint32(cp->p1);
 	p->Send_uint32(cp->p2);
 	p->Send_uint32(cp->tile);
-	p->Send_string(cp->text);
+	p->Send_string(cp->text.c_str());
 	p->Send_uint32(cp->frame);
 
 	this->SendPacket(p);
@@ -918,7 +918,7 @@ void NetworkAdminCompanyRemove(CompanyID company_id, AdminCompanyRemoveReason bc
 /**
  * Send chat to the admin network (if they did opt in for the respective update).
  */
-void NetworkAdminChat(NetworkAction action, DestType desttype, ClientID client_id, const char *msg, int64 data, bool from_admin)
+void NetworkAdminChat(NetworkAction action, DestType desttype, ClientID client_id, const char *msg, NetworkTextMessageData data, bool from_admin)
 {
 	if (from_admin) return;
 

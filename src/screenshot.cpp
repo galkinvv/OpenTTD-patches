@@ -25,6 +25,8 @@
 #include "window_func.h"
 #include "tile_map.h"
 #include "landscape.h"
+#include "smallmap_colours.h"
+#include "smallmap_gui.h"
 
 #include "table/strings.h"
 
@@ -38,6 +40,15 @@ uint _num_screenshot_formats;         ///< Number of available screenshot format
 uint _cur_screenshot_format;          ///< Index of the currently selected screenshot format in #_screenshot_formats.
 static char _screenshot_name[128];    ///< Filename of the screenshot file.
 char _full_screenshot_name[MAX_PATH]; ///< Pathname of the screenshot file.
+
+static const char *_screenshot_aux_text_key = nullptr;
+static const char *_screenshot_aux_text_value = nullptr;
+
+void SetScreenshotAuxiliaryText(const char *key, const char *value)
+{
+	_screenshot_aux_text_key = key;
+	_screenshot_aux_text_value = value;
+}
 
 /**
  * Callback function signature for generating lines of pixel data to be written to the screenshot file.
@@ -68,7 +79,7 @@ struct ScreenshotFormat {
 	ScreenshotHandlerProc *proc; ///< Function for writing the screenshot.
 };
 
-#define MKCOLOUR(x)         TO_LE32X(x)
+#define MKCOLOUR(x) TO_LE32X(x)
 
 /*************************************************
  **** SCREENSHOT CODE FOR WINDOWS BITMAP (.BMP)
@@ -302,7 +313,7 @@ static bool MakePNGImage(const char *name, ScreenshotCallback *callb, void *user
 #ifdef PNG_TEXT_SUPPORTED
 	/* Try to add some game metadata to the PNG screenshot so
 	 * it's more useful for debugging and archival purposes. */
-	png_text_struct text[2];
+	png_text_struct text[3];
 	memset(text, 0, sizeof(text));
 	text[0].key = const_cast<char *>("Software");
 	text[0].text = const_cast<char *>(_openttd_revision);
@@ -330,7 +341,13 @@ static bool MakePNGImage(const char *name, ScreenshotCallback *callb, void *user
 	text[1].text = buf;
 	text[1].text_length = p - buf;
 	text[1].compression = PNG_TEXT_COMPRESSION_zTXt;
-	png_set_text(png_ptr, info_ptr, text, 2);
+	if (_screenshot_aux_text_key && _screenshot_aux_text_value) {
+		text[2].key = const_cast<char *>(_screenshot_aux_text_key);
+		text[2].text = const_cast<char *>(_screenshot_aux_text_value);
+		text[2].text_length = strlen(_screenshot_aux_text_value);
+		text[2].compression = PNG_TEXT_COMPRESSION_zTXt;
+	}
+	png_set_text(png_ptr, info_ptr, text, _screenshot_aux_text_key && _screenshot_aux_text_value ? 3 : 2);
 #endif /* PNG_TEXT_SUPPORTED */
 
 	if (pixelformat == 8) {
@@ -656,6 +673,8 @@ static void LargeWorldCallback(void *userdata, void *buf, uint y, uint pitch, ui
 	/* Switch back to rendering to the screen */
 	_screen = old_screen;
 	_screen_disable_anim = old_disable_anim;
+
+	ClearViewPortCache(vp);
 }
 
 /**
@@ -773,6 +792,7 @@ void SetupScreenshotViewport(ScreenshotType t, ViewPort *vp)
 			break;
 		}
 	}
+	UpdateViewportSizeZoom(vp);
 }
 
 /**
@@ -872,6 +892,20 @@ void MakeScreenshotWithConfirm(ScreenshotType t)
 }
 
 /**
+ * Show a a success or failure message indicating the result of a screenshot action
+ * @param ret  whether the screenshot action was successful
+ */
+static void ShowScreenshotResultMessage(bool ret)
+{
+	if (ret) {
+		SetDParamStr(0, _screenshot_name);
+		ShowErrorMessage(STR_MESSAGE_SCREENSHOT_SUCCESSFULLY, INVALID_STRING_ID, WL_WARNING);
+	} else {
+		ShowErrorMessage(STR_ERROR_SCREENSHOT_FAILED, INVALID_STRING_ID, WL_ERROR);
+	}
+}
+
+/**
  * Make a screenshot.
  * Unconditionally take a screenshot of the requested type.
  * @param t    the type of screenshot to make.
@@ -916,23 +950,47 @@ bool MakeScreenshot(ScreenshotType t, const char *name)
 		}
 
 		case SC_MINIMAP:
-			ret = MakeMinimapWorldScreenshot();
+			ret = MakeMinimapWorldScreenshot(name);
 			break;
 
 		default:
 			NOT_REACHED();
 	}
 
-	if (ret) {
-		SetDParamStr(0, _screenshot_name);
-		ShowErrorMessage(STR_MESSAGE_SCREENSHOT_SUCCESSFULLY, INVALID_STRING_ID, WL_WARNING);
-	} else {
-		ShowErrorMessage(STR_ERROR_SCREENSHOT_FAILED, INVALID_STRING_ID, WL_ERROR);
-	}
+	ShowScreenshotResultMessage(ret);
 
 	return ret;
 }
 
+/**
+ * Callback for generating a smallmap screenshot.
+ * @param userdata SmallMapWindow window pointer
+ * @param buf Videobuffer with same bitdepth as current blitter
+ * @param y First line to render
+ * @param pitch Pitch of the videobuffer
+ * @param n Number of lines to render
+ */
+static void SmallMapCallback(void *userdata, void *buf, uint y, uint pitch, uint n)
+{
+	SmallMapWindow *window = static_cast<SmallMapWindow *>(userdata);
+	window->ScreenshotCallbackHandler(buf, y, pitch, n);
+}
+
+/**
+ * Make a screenshot of the smallmap
+ * @param width   the width of the screenshot
+ * @param height  the height of the screenshot
+ * @param window  a pointer to the smallmap window to use, the current mode and zoom status of the window is used for the screenshot
+ * @return true iff the screenshot was made successfully
+ */
+bool MakeSmallMapScreenshot(unsigned int width, unsigned int height, SmallMapWindow *window)
+{
+	_screenshot_name[0] = '\0';
+	const ScreenshotFormat *sf = _screenshot_formats + _cur_screenshot_format;
+	bool ret = sf->proc(MakeScreenshotName(SCREENSHOT_NAME, sf->extension), SmallMapCallback, window, width, height, BlitterFactory::GetCurrentBlitter()->GetScreenDepth(), _cur_palette.palette);
+	ShowScreenshotResultMessage(ret);
+	return ret;
+}
 
 /**
  * Return the owner of a tile to display it with in the small map in mode "Owner".
@@ -999,8 +1057,11 @@ static void MinimapScreenCallback(void *userdata, void *buf, uint y, uint pitch,
 /**
  * Make a minimap screenshot.
  */
-bool MakeMinimapWorldScreenshot()
+bool MakeMinimapWorldScreenshot(const char *name)
 {
+	_screenshot_name[0] = '\0';
+	if (name != nullptr) strecpy(_screenshot_name, name, lastof(_screenshot_name));
+
 	const ScreenshotFormat *sf = _screenshot_formats + _cur_screenshot_format;
 	return sf->proc(MakeScreenshotName(SCREENSHOT_NAME, sf->extension), MinimapScreenCallback, nullptr, MapSizeX(), MapSizeY(), 32, _cur_palette.palette);
 }

@@ -10,10 +10,14 @@
 #include "../stdafx.h"
 #include "../vehicle_base.h"
 #include "../station_base.h"
+#include "../scope_info.h"
+#include "../3rdparty/cpp-btree/btree_map.h"
 
 #include "saveload.h"
 
 #include "../safeguards.h"
+
+extern btree::btree_map<uint64, Money> _cargo_packet_deferred_payments;
 
 /**
  * Savegame conversion for cargopackets.
@@ -79,6 +83,27 @@
 }
 
 /**
+ * Savegame conversion for cargopackets.
+ */
+/* static */ void CargoPacket::PostVehiclesAfterLoad()
+{
+	if (SlXvIsFeaturePresent(XSLFI_CHILLPP)) {
+		extern std::map<VehicleID, CargoPacketList> _veh_cpp_packets;
+		for (auto &iter : _veh_cpp_packets) {
+			if (iter.second.empty()) continue;
+			Vehicle *v = Vehicle::Get(iter.first);
+			Station *st = Station::Get(v->First()->last_station_visited);
+			assert_msg(st != nullptr, "%s", scope_dumper().VehicleInfo(v));
+			for (CargoPacket *cp : iter.second) {
+				st->goods[v->cargo_type].cargo.AfterLoadIncreaseReservationCount(cp->count);
+				v->cargo.Append(cp, VehicleCargoList::MTA_LOAD);
+			}
+		}
+		_veh_cpp_packets.clear();
+	}
+}
+
+/**
  * Wrapper function to get the CargoPacket's internal structure while
  * some of the variables itself are private.
  * @return the saveload description for CargoPackets.
@@ -108,9 +133,10 @@ const SaveLoad *GetCargoPacketDesc()
  */
 static void Save_CAPA()
 {
+	std::vector<SaveLoad> filtered_packet_desc = SlFilterObject(GetCargoPacketDesc());
 	for (CargoPacket *cp : CargoPacket::Iterate()) {
 		SlSetArrayIndex(cp->index);
-		SlObject(cp, GetCargoPacketDesc());
+		SlObjectSaveFiltered(cp, filtered_packet_desc.data());
 	}
 }
 
@@ -119,15 +145,50 @@ static void Save_CAPA()
  */
 static void Load_CAPA()
 {
+	std::vector<SaveLoad> filtered_packet_desc = SlFilterObject(GetCargoPacketDesc());
 	int index;
-
 	while ((index = SlIterateArray()) != -1) {
 		CargoPacket *cp = new (index) CargoPacket();
-		SlObject(cp, GetCargoPacketDesc());
+		SlObjectLoadFiltered(cp, filtered_packet_desc.data());
 	}
 }
 
+/**
+ * Save cargo packet deferred payments.
+ */
+void Save_CPDP()
+{
+	SlSetLength(16 * _cargo_packet_deferred_payments.size());
+
+	for (auto &it : _cargo_packet_deferred_payments) {
+		SlWriteUint64(it.first);
+		SlWriteUint64(it.second);
+	}
+}
+
+/**
+ * Load cargo packet deferred payments.
+ */
+void Load_CPDP()
+{
+	uint count = SlGetFieldLength() / 16;
+	uint last_cargo_packet_id = (uint) -1;
+
+	for (uint i = 0; i < count; i++) {
+		uint64 k = SlReadUint64();
+		uint64 v = SlReadUint64();
+		_cargo_packet_deferred_payments[k] = v;
+		if (k >> 32 != last_cargo_packet_id) {
+			last_cargo_packet_id = k >> 32;
+			CargoPacket::Get(last_cargo_packet_id)->flags |= CargoPacket::CPF_HAS_DEFERRED_PAYMENT;
+		}
+	}
+}
+
+
+
 /** Chunk handlers related to cargo packets. */
 extern const ChunkHandler _cargopacket_chunk_handlers[] = {
-	{ 'CAPA', Save_CAPA, Load_CAPA, nullptr, nullptr, CH_ARRAY | CH_LAST},
+	{ 'CAPA', Save_CAPA, Load_CAPA, nullptr, nullptr, CH_ARRAY },
+	{ 'CPDP', Save_CPDP, Load_CPDP, nullptr, nullptr, CH_RIFF | CH_LAST },
 };

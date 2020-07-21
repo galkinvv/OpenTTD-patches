@@ -15,6 +15,13 @@
 #include "../core/smallvec_type.hpp"
 #include "table/strings.h"
 
+enum DropDownSyncFocus {
+	DDSF_NONE = 0,
+	DDSF_RECV_FOCUS = 1,
+	DDSF_LOST_FOCUS = 2,
+	DDSF_ALL = DDSF_RECV_FOCUS | DDSF_LOST_FOCUS,
+};
+
 /**
  * Base list item class from which others are derived. If placed in a list it
  * will appear as a horizontal line in the menu.
@@ -98,8 +105,8 @@ public:
  */
 typedef std::vector<std::unique_ptr<const DropDownListItem>> DropDownList;
 
-void ShowDropDownListAt(Window *w, DropDownList &&list, int selected, int button, Rect wi_rect, Colours wi_colour, bool auto_width = false, bool instant_close = false);
+void ShowDropDownListAt(Window *w, DropDownList &&list, int selected, int button, Rect wi_rect, Colours wi_colour, bool auto_width = false, bool instant_close = false, DropDownSyncFocus sync_parent_focus = DDSF_NONE);
 
-void ShowDropDownList(Window *w, DropDownList &&list, int selected, int button, uint width = 0, bool auto_width = false, bool instant_close = false);
+void ShowDropDownList(Window *w, DropDownList &&list, int selected, int button, uint width = 0, bool auto_width = false, bool instant_close = false, DropDownSyncFocus sync_parent_focus = DDSF_NONE);
 
 #endif /* WIDGETS_DROPDOWN_TYPE_H */

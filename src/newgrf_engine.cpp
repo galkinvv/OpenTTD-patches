@@ -608,7 +608,8 @@ static uint32 VehicleGetVariable(Vehicle *v, const VehicleScopeResolver *object,
 		case 0x4A:
 			switch (v->type) {
 				case VEH_TRAIN: {
-					RailType rt = GetTileRailType(v->tile);
+					if (Train::From(v)->IsVirtual()) return 0x1FF;
+					RailType rt = GetTileRailTypeByTrackBit(v->tile, Train::From(v)->track);
 					return (HasPowerOnRail(Train::From(v)->railtype, rt) ? 0x100 : 0) | GetReverseRailTypeTranslation(rt, object->ro.grffile);
 				}
 
@@ -710,9 +711,14 @@ static uint32 VehicleGetVariable(Vehicle *v, const VehicleScopeResolver *object,
 				const Train *t = Train::From(v);
 				bool is_powered_wagon = HasBit(t->flags, VRF_POWEREDWAGON);
 				const Train *u = is_powered_wagon ? t->First() : t; // for powered wagons the engine defines the type of engine (i.e. railtype)
-				RailType railtype = GetRailType(v->tile);
 				bool powered = t->IsEngine() || is_powered_wagon;
-				bool has_power = HasPowerOnRail(u->railtype, railtype);
+				bool has_power;
+				if (u->IsVirtual()) {
+					has_power = true;
+				} else {
+					RailType railtype = GetRailTypeByTrackBit(v->tile, t->track);
+					has_power = HasPowerOnRail(u->railtype, railtype);
+				}
 
 				if (powered && has_power) SetBit(modflags, 5);
 				if (powered && !has_power) SetBit(modflags, 6);

@@ -11,6 +11,8 @@
 #include "train.h"
 #include "roadveh.h"
 #include "depot_map.h"
+#include "tunnel_base.h"
+#include "slope_type.h"
 
 #include "safeguards.h"
 
@@ -28,12 +30,9 @@ void GroundVehicle<T, Type>::PowerChanged()
 	uint32 number_of_parts = 0;
 	uint16 max_track_speed = this->vcache.cached_max_speed; // Max track speed in internal units.
 
-	for (const T *u = v; u != nullptr; u = u->Next()) {
-		uint32 current_power = u->GetPower() + u->GetPoweredPartPower(u);
-		total_power += current_power;
+	this->CalculatePower(total_power, max_te, false);
 
-		/* Only powered parts add tractive effort. */
-		if (current_power > 0) max_te += u->GetWeight() * u->GetTractiveEffort();
+	for (const T *u = v; u != nullptr; u = u->Next()) {
 		number_of_parts++;
 
 		/* Get minimum max speed for this track. */
@@ -56,8 +55,6 @@ void GroundVehicle<T, Type>::PowerChanged()
 
 	this->gcache.cached_air_drag = air_drag + 3 * air_drag * number_of_parts / 20;
 
-	max_te *= GROUND_ACCELERATION; // Tractive effort in (tonnes * 1000 * 9.8 =) N.
-	max_te /= 256;  // Tractive effort is a [0-255] coefficient.
 	if (this->gcache.cached_power != total_power || this->gcache.cached_max_te != max_te) {
 		/* Stop the vehicle if it has no power. */
 		if (total_power == 0) this->vehstatus |= VS_STOPPED;
@@ -69,6 +66,31 @@ void GroundVehicle<T, Type>::PowerChanged()
 	}
 
 	this->gcache.cached_max_track_speed = max_track_speed;
+}
+
+template <class T, VehicleType Type>
+void GroundVehicle<T, Type>::CalculatePower(uint32& total_power, uint32& max_te, bool breakdowns) const {
+
+	total_power = 0;
+	max_te = 0;
+
+	const T *v = T::From(this);
+
+	for (const T *u = v; u != nullptr; u = u->Next()) {
+		uint32 current_power = u->GetPower() + u->GetPoweredPartPower(u);
+
+		if (breakdowns && u->breakdown_ctr == 1 && u->breakdown_type == BREAKDOWN_LOW_POWER) {
+			current_power = current_power * u->breakdown_severity / 256;
+		}
+
+		total_power += current_power;
+
+		/* Only powered parts add tractive effort. */
+		if (current_power > 0) max_te += u->GetWeight() * u->GetTractiveEffort();
+	}
+
+	max_te *= GROUND_ACCELERATION; // Tractive effort in (tonnes * 1000 * 9.8 =) N.
+	max_te /= 256;  // Tractive effort is a [0-255] coefficient.
 }
 
 /**
@@ -86,7 +108,9 @@ void GroundVehicle<T, Type>::CargoChanged()
 		weight += current_weight;
 		/* Slope steepness is in percent, result in N. */
 		u->gcache.cached_slope_resistance = current_weight * u->GetSlopeSteepness() * 100;
+		u->cur_image_valid_dir = INVALID_DIR;
 	}
+	ClrBit(this->vcache.cached_veh_flags, VCF_GV_ZERO_SLOPE_RESIST);
 
 	/* Store consist weight in cache. */
 	this->gcache.cached_weight = max<uint32>(1, weight);
@@ -102,7 +126,7 @@ void GroundVehicle<T, Type>::CargoChanged()
  * @return Current acceleration of the vehicle.
  */
 template <class T, VehicleType Type>
-int GroundVehicle<T, Type>::GetAcceleration() const
+int GroundVehicle<T, Type>::GetAcceleration()
 {
 	/* Templated class used for function calls for performance reasons. */
 	const T *v = T::From(this);
@@ -148,7 +172,16 @@ int GroundVehicle<T, Type>::GetAcceleration() const
 	/* This value allows to know if the vehicle is accelerating or braking. */
 	AccelStatus mode = v->GetAccelerationStatus();
 
-	const int max_te = this->gcache.cached_max_te; // [N]
+	/* handle breakdown power reduction */
+	uint32 max_te = this->gcache.cached_max_te; // [N]
+	if (Type == VEH_TRAIN && mode == AS_ACCEL && HasBit(Train::From(this)->flags, VRF_BREAKDOWN_POWER)) {
+		/* We'd like to cache this, but changing cached_power has too many unwanted side-effects */
+		uint32 power_temp;
+		this->CalculatePower(power_temp, max_te, true);
+		power = power_temp * 746ll;
+	}
+
+
 	/* Constructued from power, with need to multiply by 18 and assuming
 	 * low speed, it needs to be a 64 bit integer too. */
 	int64 force;
@@ -156,7 +189,7 @@ int GroundVehicle<T, Type>::GetAcceleration() const
 		if (!maglev) {
 			/* Conversion factor from km/h to m/s is 5/18 to get [N] in the end. */
 			force = power * 18 / (speed * 5);
-			if (mode == AS_ACCEL && force > max_te) force = max_te;
+			if (mode == AS_ACCEL && force > (int)max_te) force = max_te;
 		} else {
 			force = power / 25;
 		}
@@ -164,6 +197,32 @@ int GroundVehicle<T, Type>::GetAcceleration() const
 		/* "Kickoff" acceleration. */
 		force = (mode == AS_ACCEL && !maglev) ? min(max_te, power) : power;
 		force = max(force, (mass * 8) + resistance);
+	}
+
+	/* If power is 0 because of a breakdown, we make the force 0 if accelerating */
+	if (Type == VEH_TRAIN && mode == AS_ACCEL && HasBit(Train::From(this)->flags, VRF_BREAKDOWN_POWER) && power == 0) {
+		force = 0;
+	}
+
+	/* Calculate the breakdown chance */
+	if (_settings_game.vehicle.improved_breakdowns) {
+		assert(this->gcache.cached_max_track_speed > 0);
+		/** First, calculate (resistance / force * current speed / max speed) << 16.
+		 * This yields a number x on a 0-1 scale, but shifted 16 bits to the left.
+		 * We then calculate 64 + 128x, clamped to 0-255, but still shifted 16 bits to the left.
+		 * Then we apply a correction for multiengine trains, and in the end we shift it 16 bits to the right to get a 0-255 number.
+		 * @note A seperate correction for multiheaded engines is done in CheckVehicleBreakdown. We can't do that here because it would affect the whole consist.
+		 */
+		uint64 breakdown_factor = (uint64)abs(resistance) * (uint64)(this->cur_speed << 16);
+		breakdown_factor /= (max(force, (int64)100) * this->gcache.cached_max_track_speed);
+		breakdown_factor = min((64 << 16) + (breakdown_factor * 128), 255 << 16);
+		if (Type == VEH_TRAIN && Train::From(this)->tcache.cached_num_engines > 1) {
+			/* For multiengine trains, breakdown chance is multiplied by 3 / (num_engines + 2) */
+			breakdown_factor *= 3;
+			breakdown_factor /= (Train::From(this)->tcache.cached_num_engines + 2);
+		}
+		/* breakdown_chance is at least 5 (5 / 128 = ~4% of the normal chance) */
+		this->breakdown_chance_factor = max(breakdown_factor >> 16, (uint64)5);
 	}
 
 	if (mode == AS_ACCEL) {
@@ -176,7 +235,28 @@ int GroundVehicle<T, Type>::GetAcceleration() const
 		 * a hill will never speed up enough to (eventually) get back to the
 		 * same (maximum) speed. */
 		int accel = ClampToI32((force - resistance) / (mass * 4));
-		return force < resistance ? min(-1, accel) : max(1, accel);
+		accel = force < resistance ? min(-1, accel) : max(1, accel);
+		if (this->type == VEH_TRAIN) {
+			if(_settings_game.vehicle.train_acceleration_model == AM_ORIGINAL &&
+					HasBit(Train::From(this)->flags, VRF_BREAKDOWN_POWER)) {
+				/* We need to apply the power reducation for non-realistic acceleration here */
+				uint32 power;
+				CalculatePower(power, max_te, true);
+				accel = accel * power / this->gcache.cached_power;
+				accel -= this->acceleration >> 1;
+			}
+
+			if (this->IsFrontEngine() && !(this->current_order_time & 0x1FF) &&
+					!(this->current_order.IsType(OT_LOADING)) &&
+					!(Train::From(this)->flags & (VRF_IS_BROKEN | (1 << VRF_TRAIN_STUCK))) &&
+					this->cur_speed < 3 && accel < 5) {
+				SetBit(Train::From(this)->flags, VRF_TOO_HEAVY);
+				extern std::vector<Train *> _tick_train_too_heavy_cache;
+				_tick_train_too_heavy_cache.push_back(Train::From(this));
+			}
+		}
+
+		return accel;
 	} else {
 		return ClampToI32(min(-force - resistance, -10000) / mass);
 	}
@@ -201,6 +281,68 @@ bool GroundVehicle<T, Type>::IsChainInDepot() const
 	}
 
 	return true;
+}
+
+/**
+ * Updates vehicle's Z inclination inside a wormhole, where applicable.
+ */
+template <class T, VehicleType Type>
+void GroundVehicle<T, Type>::UpdateZPositionInWormhole()
+{
+	if (!IsTunnel(this->tile)) return;
+
+	const Tunnel *t = Tunnel::GetByTile(this->tile);
+	if (!t->is_chunnel) return;
+
+	TileIndex pos_tile = TileVirtXY(this->x_pos, this->y_pos);
+
+	ClrBit(this->gv_flags, GVF_GOINGUP_BIT);
+	ClrBit(this->gv_flags, GVF_GOINGDOWN_BIT);
+
+	if (pos_tile == t->tile_n || pos_tile == t->tile_s) {
+		this->z_pos = 0;
+		return;
+	}
+
+	int north_coord, south_coord, pos_coord;
+	bool going_north;
+	Slope slope_north;
+	if (t->tile_s - t->tile_n > MapMaxX()) {
+		// tunnel extends along Y axis (DIAGDIR_SE from north end), has same X values
+		north_coord = TileY(t->tile_n);
+		south_coord = TileY(t->tile_s);
+		pos_coord = TileY(pos_tile);
+		going_north = (this->direction == DIR_NW);
+		slope_north = SLOPE_NW;
+	} else {
+		// tunnel extends along X axis (DIAGDIR_SW from north end), has same Y values
+		north_coord = TileX(t->tile_n);
+		south_coord = TileX(t->tile_s);
+		pos_coord = TileX(pos_tile);
+		going_north = (this->direction == DIR_NE);
+		slope_north = SLOPE_NE;
+	}
+
+	Slope slope = SLOPE_FLAT;
+
+	int delta;
+	if ((delta = pos_coord - north_coord) <= 3) {
+		this->z_pos = TILE_HEIGHT * (delta == 3 ? -2 : -1);
+		if (delta != 2) {
+			slope = slope_north;
+			SetBit(this->gv_flags, going_north ? GVF_GOINGUP_BIT : GVF_GOINGDOWN_BIT);
+			ClrBit(this->First()->vcache.cached_veh_flags, VCF_GV_ZERO_SLOPE_RESIST);
+		}
+	} else if ((delta = south_coord - pos_coord) <= 3) {
+		this->z_pos = TILE_HEIGHT * (delta == 3 ? -2 : -1);
+		if (delta != 2) {
+			slope = SLOPE_ELEVATED ^ slope_north;
+			SetBit(this->gv_flags, going_north ? GVF_GOINGDOWN_BIT : GVF_GOINGUP_BIT);
+			ClrBit(this->First()->vcache.cached_veh_flags, VCF_GV_ZERO_SLOPE_RESIST);
+		}
+	}
+
+	if (slope != SLOPE_FLAT) this->z_pos += GetPartialPixelZ(this->x_pos & 0xF, this->y_pos & 0xF, slope);
 }
 
 /* Instantiation for Train */

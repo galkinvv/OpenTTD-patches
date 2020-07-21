@@ -15,6 +15,8 @@
 #include "../network/network.h"
 #include "../window_func.h"
 #include "../framerate_type.h"
+#include "../scope_info.h"
+#include "../string_func.h"
 #include "ai_scanner.hpp"
 #include "ai_instance.hpp"
 #include "ai_config.hpp"
@@ -77,6 +79,7 @@
 	Backup<CompanyID> cur_company(_current_company, FILE_LINE);
 	for (const Company *c : Company::Iterate()) {
 		if (c->is_ai) {
+			SCOPE_INFO_FMT([&], "AI::GameLoop: %i: %s (v%d)\n", (int)c->index, c->ai_info->GetName(), c->ai_info->GetVersion());
 			PerformanceMeasurer framerate((PerformanceElement)(PFE_AI0 + c->index));
 			cur_company.Change(c->index);
 			c->ai_instance->GameLoop();
@@ -177,15 +180,10 @@
 	AI::KillAll();
 
 	if (keepConfig) {
-		/* Run a rescan, which indexes all AIInfos again, and check if we can
-		 *  still load all the AIS, while keeping the configs in place */
-		Rescan();
+		/* Do not bother re-scanning AI files, just reset config */
+		ResetConfig();
 	} else {
-		delete AI::scanner_info;
-		delete AI::scanner_library;
-		AI::scanner_info = nullptr;
-		AI::scanner_library = nullptr;
-
+		/* Do not bother re-scanning AI files, just delete config */
 		for (CompanyID c = COMPANY_FIRST; c < MAX_COMPANIES; c++) {
 			if (_settings_game.ai_config[c] != nullptr) {
 				delete _settings_game.ai_config[c];

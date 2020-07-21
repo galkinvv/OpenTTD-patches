@@ -24,6 +24,8 @@
 #include "core/geometry_func.hpp"
 #include "newgrf_debug.h"
 #include "zoom_func.h"
+#include "tunnelbridge_map.h"
+#include "viewport_type.h"
 #include "guitimer_func.h"
 #include "rev.h"
 
@@ -123,6 +125,13 @@ public:
 #	define LANDINFOD_LEVEL 1
 #endif
 		DEBUG(misc, LANDINFOD_LEVEL, "TILE: %#x (%i,%i)", tile, TileX(tile), TileY(tile));
+		if(IsTunnelTile(tile)) {
+			DEBUG(misc, LANDINFOD_LEVEL, "tunnel pool size: %u", (uint)Tunnel::GetPoolSize());
+			DEBUG(misc, LANDINFOD_LEVEL, "index: %#x"          , Tunnel::GetByTile(tile)->index);
+			DEBUG(misc, LANDINFOD_LEVEL, "north tile: %#x"     , Tunnel::GetByTile(tile)->tile_n);
+			DEBUG(misc, LANDINFOD_LEVEL, "south tile: %#x"     , Tunnel::GetByTile(tile)->tile_s);
+			DEBUG(misc, LANDINFOD_LEVEL, "is chunnel: %u"      , Tunnel::GetByTile(tile)->is_chunnel);
+		}
 		DEBUG(misc, LANDINFOD_LEVEL, "type   = %#x", _m[tile].type);
 		DEBUG(misc, LANDINFOD_LEVEL, "height = %#x", _m[tile].height);
 		DEBUG(misc, LANDINFOD_LEVEL, "m1     = %#x", _m[tile].m1);
@@ -164,7 +173,9 @@ public:
 		td.airport_name = STR_NULL;
 		td.airport_tile_name = STR_NULL;
 		td.railtype = STR_NULL;
+		td.railtype2 = STR_NULL;
 		td.rail_speed = 0;
+		td.rail_speed2 = 0;
 		td.roadtype = STR_NULL;
 		td.road_speed = 0;
 		td.tramtype = STR_NULL;
@@ -180,6 +191,7 @@ public:
 
 		/* Tiletype */
 		SetDParam(0, td.dparam[0]);
+		SetDParam(1, td.dparam[1]);
 		GetString(this->landinfo_data[line_nr], td.str, lastof(this->landinfo_data[line_nr]));
 		line_nr++;
 
@@ -284,6 +296,20 @@ public:
 		/* Rail speed limit */
 		if (td.rail_speed != 0) {
 			SetDParam(0, td.rail_speed);
+			GetString(this->landinfo_data[line_nr], STR_LANG_AREA_INFORMATION_RAIL_SPEED_LIMIT, lastof(this->landinfo_data[line_nr]));
+			line_nr++;
+		}
+
+		/* 2nd Rail type name */
+		if (td.railtype2 != STR_NULL) {
+			SetDParam(0, td.railtype2);
+			GetString(this->landinfo_data[line_nr], STR_LANG_AREA_INFORMATION_RAIL_TYPE, lastof(this->landinfo_data[line_nr]));
+			line_nr++;
+		}
+
+		/* 2nd Rail speed limit */
+		if (td.rail_speed2 != 0) {
+			SetDParam(0, td.rail_speed2);
 			GetString(this->landinfo_data[line_nr], STR_LANG_AREA_INFORMATION_RAIL_SPEED_LIMIT, lastof(this->landinfo_data[line_nr]));
 			line_nr++;
 		}
@@ -400,6 +426,8 @@ static const NWidgetPart _nested_about_widgets[] = {
 			NWidget(WWT_EMPTY, INVALID_COLOUR, WID_A_SCROLLING_TEXT),
 		EndContainer(),
 		NWidget(WWT_LABEL, COLOUR_GREY, WID_A_WEBSITE), SetDataTip(STR_BLACK_RAW_STRING, STR_NULL),
+		NWidget(WWT_LABEL, COLOUR_GREY, WID_A_WEBSITE1), SetDataTip(STR_BLACK_RAW_STRING, STR_NULL),
+		NWidget(WWT_LABEL, COLOUR_GREY, WID_A_WEBSITE2), SetDataTip(STR_BLACK_RAW_STRING, STR_NULL),
 		NWidget(WWT_LABEL, COLOUR_GREY, WID_A_COPYRIGHT), SetDataTip(STR_ABOUT_COPYRIGHT_OPENTTD, STR_NULL),
 	EndContainer(),
 };
@@ -473,6 +501,10 @@ static const char * const _credits[] = {
 	"  Bug Reporters - Without whom OpenTTD would still be full of bugs!",
 	"",
 	"",
+	"Developer of this patchpack:",
+	"  Jonathan G. Rennison (JGR)",
+	"",
+	"",
 	"And last but not least:",
 	"  Chris Sawyer - For an amazing game!"
 };
@@ -495,7 +527,9 @@ struct AboutWindow : public Window {
 
 	void SetStringParameters(int widget) const override
 	{
-		if (widget == WID_A_WEBSITE) SetDParamStr(0, "Website: http://www.openttd.org");
+		if (widget == WID_A_WEBSITE) SetDParamStr(0, "Main project website: http://www.openttd.org");
+		if (widget == WID_A_WEBSITE1) SetDParamStr(0, "Patchpack thread: https://www.tt-forums.net/viewtopic.php?f=33&t=73469");
+		if (widget == WID_A_WEBSITE2) SetDParamStr(0, "Patchpack Github: https://github.com/JGRennison/OpenTTD-patches");
 		if (widget == WID_A_COPYRIGHT) SetDParamStr(0, _openttd_revision_year);
 	}
 
@@ -676,6 +710,10 @@ struct TooltipsWindow : public Window
 	byte paramcount;                  ///< Number of string parameters in #string_id.
 	uint64 params[5];                 ///< The string parameters.
 	TooltipCloseCondition close_cond; ///< Condition for closing the window.
+	char buffer[DRAW_STRING_BUFFER];  ///< Text to draw
+	int viewport_virtual_left;        ///< Owner viewport state: left
+	int viewport_virtual_top;         ///< Owner viewport state: top
+	bool delete_next_mouse_loop;      ///< Delete window on the next mouse loop
 
 	TooltipsWindow(Window *parent, StringID str, uint paramcount, const uint64 params[], TooltipCloseCondition close_tooltip) : Window(&_tool_tips_desc)
 	{
@@ -686,6 +724,12 @@ struct TooltipsWindow : public Window
 		if (paramcount > 0) memcpy(this->params, params, sizeof(this->params[0]) * paramcount);
 		this->paramcount = paramcount;
 		this->close_cond = close_tooltip;
+		this->delete_next_mouse_loop = false;
+		if (this->paramcount == 0) GetString(this->buffer, str, lastof(this->buffer)); // Get the text while params are available
+		if (close_tooltip == TCC_HOVER_VIEWPORT) {
+			this->viewport_virtual_left = parent->viewport->virtual_left;
+			this->viewport_virtual_top = parent->viewport->virtual_top;
+		}
 
 		this->InitNested();
 
@@ -731,16 +775,20 @@ struct TooltipsWindow : public Window
 		GfxFillRect(r.left, r.top, r.right, r.bottom, PC_BLACK);
 		GfxFillRect(r.left + 1, r.top + 1, r.right - 1, r.bottom - 1, PC_LIGHT_YELLOW);
 
-		for (uint arg = 0; arg < this->paramcount; arg++) {
-			SetDParam(arg, this->params[arg]);
+		if (this->paramcount == 0) {
+			DrawStringMultiLine(r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT, r.top + WD_FRAMERECT_TOP, r.bottom - WD_FRAMERECT_BOTTOM, this->buffer, TC_FROMSTRING, SA_CENTER);
+		} else {
+			for (uint arg = 0; arg < this->paramcount; arg++) {
+				SetDParam(arg, this->params[arg]);
+			}
+			DrawStringMultiLine(r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT, r.top + WD_FRAMERECT_TOP, r.bottom - WD_FRAMERECT_BOTTOM, this->string_id, TC_FROMSTRING, SA_CENTER);
 		}
-		DrawStringMultiLine(r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT, r.top + WD_FRAMERECT_TOP, r.bottom - WD_FRAMERECT_BOTTOM, this->string_id, TC_FROMSTRING, SA_CENTER);
 	}
 
 	void OnMouseLoop() override
 	{
 		/* Always close tooltips when the cursor is not in our window. */
-		if (!_cursor.in_window) {
+		if (!_cursor.in_window || this->delete_next_mouse_loop) {
 			delete this;
 			return;
 		}
@@ -751,6 +799,20 @@ struct TooltipsWindow : public Window
 			case TCC_RIGHT_CLICK: if (!_right_button_down) delete this; break;
 			case TCC_HOVER: if (!_mouse_hovering) delete this; break;
 			case TCC_NONE: break;
+			case TCC_NEXT_LOOP: this->delete_next_mouse_loop = true; break;
+
+			case TCC_HOVER_VIEWPORT:
+				if (_settings_client.gui.hover_delay_ms == 0) {
+					this->delete_next_mouse_loop = true;
+				} else if (!_mouse_hovering) {
+					delete this;
+					break;
+				}
+				if (this->viewport_virtual_left != this->parent->viewport->virtual_left ||
+						this->viewport_virtual_top != this->parent->viewport->virtual_top) {
+					this->delete_next_mouse_loop = true;
+				}
+				break;
 		}
 	}
 };
@@ -971,6 +1033,8 @@ struct QueryStringWindow : public Window
 	QueryStringWindow(StringID str, StringID caption, uint max_bytes, uint max_chars, WindowDesc *desc, Window *parent, CharSetFilter afilter, QueryStringFlags flags) :
 			Window(desc), editbox(max_bytes, max_chars)
 	{
+		assert(parent != nullptr);
+
 		char *last_of = &this->editbox.text.buf[this->editbox.text.max_bytes - 1];
 		GetString(this->editbox.text.buf, str, last_of);
 		str_validate(this->editbox.text.buf, last_of, SVS_NONE);
@@ -1052,7 +1116,7 @@ struct QueryStringWindow : public Window
 			if (this->parent != nullptr) {
 				this->parent->OnQueryTextFinished(this->editbox.text.buf);
 			} else {
-				HandleOnEditText(this->editbox.text.buf);
+				NOT_REACHED();
 			}
 			this->editbox.handled = true;
 		}
@@ -1275,4 +1339,88 @@ void ShowQuery(StringID caption, StringID message, Window *parent, QueryCallback
 	}
 
 	new QueryWindow(&_query_desc, caption, message, parent, callback);
+}
+
+static const NWidgetPart _modifier_key_toggle_widgets[] = {
+	NWidget(NWID_HORIZONTAL),
+		NWidget(WWT_CLOSEBOX, COLOUR_GREY),
+		NWidget(WWT_CAPTION, COLOUR_GREY), SetDataTip(STR_MODIFIER_KEY_TOGGLE_CAPTION, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
+		NWidget(WWT_SHADEBOX, COLOUR_GREY),
+		NWidget(WWT_STICKYBOX, COLOUR_GREY),
+	EndContainer(),
+	NWidget(WWT_PANEL, COLOUR_GREY),
+		NWidget(NWID_SPACER), SetMinimalSize(0, 2),
+		NWidget(NWID_HORIZONTAL, NC_EQUALSIZE), SetPIP(2, 0, 2),
+			NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_MKT_SHIFT), SetMinimalSize(78, 12), SetFill(1, 0),
+										SetDataTip(STR_SHIFT_KEY_NAME, STR_MODIFIER_TOGGLE_SHIFT_TOOLTIP),
+			NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_MKT_CTRL), SetMinimalSize(78, 12), SetFill(1, 0),
+										SetDataTip(STR_CTRL_KEY_NAME, STR_MODIFIER_TOGGLE_CTRL_TOOLTIP),
+		EndContainer(),
+		NWidget(NWID_SPACER), SetMinimalSize(0, 2),
+	EndContainer(),
+};
+
+struct ModifierKeyToggleWindow : Window {
+	ModifierKeyToggleWindow(WindowDesc *desc, WindowNumber window_number) :
+			Window(desc)
+	{
+		this->InitNested(window_number);
+		this->UpdateButtons();
+	}
+
+	~ModifierKeyToggleWindow()
+	{
+		_invert_shift = false;
+		_invert_ctrl = false;
+	}
+
+	void UpdateButtons()
+	{
+		this->SetWidgetLoweredState(WID_MKT_SHIFT, _shift_pressed);
+		this->SetWidgetLoweredState(WID_MKT_CTRL, _ctrl_pressed);
+		this->SetDirty();
+	}
+
+	void OnCTRLStateChangeAlways() override
+	{
+		this->UpdateButtons();
+	}
+
+	void OnShiftStateChange() override
+	{
+		this->UpdateButtons();
+	}
+
+	void OnClick(Point pt, int widget, int click_count) override
+	{
+		switch (widget) {
+			case WID_MKT_SHIFT:
+				_invert_shift = !_invert_shift;
+				UpdateButtons();
+				break;
+
+			case WID_MKT_CTRL:
+				_invert_ctrl = !_invert_ctrl;
+				UpdateButtons();
+				break;
+		}
+	}
+
+	void OnInvalidateData(int data = 0, bool gui_scope = true) override
+	{
+		if (!gui_scope) return;
+		this->UpdateButtons();
+	}
+};
+
+static WindowDesc _modifier_key_toggle_desc(
+	WDP_AUTO, "modifier_key_toggle", 0, 0,
+	WC_MODIFIER_KEY_TOGGLE, WC_NONE,
+	WDF_NO_FOCUS,
+	_modifier_key_toggle_widgets, lengthof(_modifier_key_toggle_widgets)
+);
+
+void ShowModifierKeyToggleWindow()
+{
+	AllocateWindowDescFront<ModifierKeyToggleWindow>(&_modifier_key_toggle_desc, 0);
 }

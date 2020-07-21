@@ -39,6 +39,8 @@ NetworkGameSocketHandler::NetworkGameSocketHandler(SOCKET s) : info(nullptr), cl
  */
 NetworkRecvStatus NetworkGameSocketHandler::CloseConnection(bool error)
 {
+	if (this->ignore_close) return NETWORK_RECV_STATUS_CONN_LOST;
+
 	/* Clients drop back to the main menu */
 	if (!_network_server && _networking) {
 		extern void ClientNetworkEmergencySave(); // from network_client.cpp
@@ -77,6 +79,8 @@ NetworkRecvStatus NetworkGameSocketHandler::HandlePacket(Packet *p)
 		case PACKET_SERVER_NEED_COMPANY_PASSWORD: return this->Receive_SERVER_NEED_COMPANY_PASSWORD(p);
 		case PACKET_CLIENT_GAME_PASSWORD:         return this->Receive_CLIENT_GAME_PASSWORD(p);
 		case PACKET_CLIENT_COMPANY_PASSWORD:      return this->Receive_CLIENT_COMPANY_PASSWORD(p);
+		case PACKET_CLIENT_SETTINGS_PASSWORD:     return this->Receive_CLIENT_SETTINGS_PASSWORD(p);
+		case PACKET_SERVER_SETTINGS_ACCESS:       return this->Receive_SERVER_SETTINGS_ACCESS(p);
 		case PACKET_SERVER_WELCOME:               return this->Receive_SERVER_WELCOME(p);
 		case PACKET_CLIENT_GETMAP:                return this->Receive_CLIENT_GETMAP(p);
 		case PACKET_SERVER_WAIT:                  return this->Receive_SERVER_WAIT(p);
@@ -97,6 +101,8 @@ NetworkRecvStatus NetworkGameSocketHandler::HandlePacket(Packet *p)
 		case PACKET_CLIENT_SET_NAME:              return this->Receive_CLIENT_SET_NAME(p);
 		case PACKET_CLIENT_QUIT:                  return this->Receive_CLIENT_QUIT(p);
 		case PACKET_CLIENT_ERROR:                 return this->Receive_CLIENT_ERROR(p);
+		case PACKET_CLIENT_DESYNC_LOG:            return this->Receive_CLIENT_DESYNC_LOG(p);
+		case PACKET_SERVER_DESYNC_LOG:            return this->Receive_SERVER_DESYNC_LOG(p);
 		case PACKET_SERVER_QUIT:                  return this->Receive_SERVER_QUIT(p);
 		case PACKET_SERVER_ERROR_QUIT:            return this->Receive_SERVER_ERROR_QUIT(p);
 		case PACKET_SERVER_SHUTDOWN:              return this->Receive_SERVER_SHUTDOWN(p);
@@ -131,10 +137,9 @@ NetworkRecvStatus NetworkGameSocketHandler::HandlePacket(Packet *p)
  */
 NetworkRecvStatus NetworkGameSocketHandler::ReceivePackets()
 {
-	Packet *p;
+	std::unique_ptr<Packet> p;
 	while ((p = this->ReceivePacket()) != nullptr) {
-		NetworkRecvStatus res = HandlePacket(p);
-		delete p;
+		NetworkRecvStatus res = HandlePacket(p.get());
 		if (res != NETWORK_RECV_STATUS_OKAY) return res;
 	}
 
@@ -163,6 +168,8 @@ NetworkRecvStatus NetworkGameSocketHandler::Receive_SERVER_NEED_GAME_PASSWORD(Pa
 NetworkRecvStatus NetworkGameSocketHandler::Receive_SERVER_NEED_COMPANY_PASSWORD(Packet *p) { return this->ReceiveInvalidPacket(PACKET_SERVER_NEED_COMPANY_PASSWORD); }
 NetworkRecvStatus NetworkGameSocketHandler::Receive_CLIENT_GAME_PASSWORD(Packet *p) { return this->ReceiveInvalidPacket(PACKET_CLIENT_GAME_PASSWORD); }
 NetworkRecvStatus NetworkGameSocketHandler::Receive_CLIENT_COMPANY_PASSWORD(Packet *p) { return this->ReceiveInvalidPacket(PACKET_CLIENT_COMPANY_PASSWORD); }
+NetworkRecvStatus NetworkGameSocketHandler::Receive_CLIENT_SETTINGS_PASSWORD(Packet *p) { return this->ReceiveInvalidPacket(PACKET_CLIENT_SETTINGS_PASSWORD); }
+NetworkRecvStatus NetworkGameSocketHandler::Receive_SERVER_SETTINGS_ACCESS(Packet *p) { return this->ReceiveInvalidPacket(PACKET_SERVER_SETTINGS_ACCESS); }
 NetworkRecvStatus NetworkGameSocketHandler::Receive_SERVER_WELCOME(Packet *p) { return this->ReceiveInvalidPacket(PACKET_SERVER_WELCOME); }
 NetworkRecvStatus NetworkGameSocketHandler::Receive_CLIENT_GETMAP(Packet *p) { return this->ReceiveInvalidPacket(PACKET_CLIENT_GETMAP); }
 NetworkRecvStatus NetworkGameSocketHandler::Receive_SERVER_WAIT(Packet *p) { return this->ReceiveInvalidPacket(PACKET_SERVER_WAIT); }
@@ -183,6 +190,8 @@ NetworkRecvStatus NetworkGameSocketHandler::Receive_CLIENT_SET_PASSWORD(Packet *
 NetworkRecvStatus NetworkGameSocketHandler::Receive_CLIENT_SET_NAME(Packet *p) { return this->ReceiveInvalidPacket(PACKET_CLIENT_SET_NAME); }
 NetworkRecvStatus NetworkGameSocketHandler::Receive_CLIENT_QUIT(Packet *p) { return this->ReceiveInvalidPacket(PACKET_CLIENT_QUIT); }
 NetworkRecvStatus NetworkGameSocketHandler::Receive_CLIENT_ERROR(Packet *p) { return this->ReceiveInvalidPacket(PACKET_CLIENT_ERROR); }
+NetworkRecvStatus NetworkGameSocketHandler::Receive_CLIENT_DESYNC_LOG(Packet *p) { return this->ReceiveInvalidPacket(PACKET_CLIENT_DESYNC_LOG); }
+NetworkRecvStatus NetworkGameSocketHandler::Receive_SERVER_DESYNC_LOG(Packet *p) { return this->ReceiveInvalidPacket(PACKET_SERVER_DESYNC_LOG); }
 NetworkRecvStatus NetworkGameSocketHandler::Receive_SERVER_QUIT(Packet *p) { return this->ReceiveInvalidPacket(PACKET_SERVER_QUIT); }
 NetworkRecvStatus NetworkGameSocketHandler::Receive_SERVER_ERROR_QUIT(Packet *p) { return this->ReceiveInvalidPacket(PACKET_SERVER_ERROR_QUIT); }
 NetworkRecvStatus NetworkGameSocketHandler::Receive_SERVER_SHUTDOWN(Packet *p) { return this->ReceiveInvalidPacket(PACKET_SERVER_SHUTDOWN); }

@@ -62,6 +62,7 @@ add_files(
     bridge_gui.cpp
     bridge_map.cpp
     bridge_map.h
+    bridge_signal_map.h
     build_vehicle_gui.cpp
     cargo_type.h
     cargoaction.cpp
@@ -101,6 +102,7 @@ add_files(
     cpu.h
     crashlog.cpp
     crashlog.h
+    crashlog_bfd.h
     currency.cpp
     currency.h
     date.cpp
@@ -110,7 +112,13 @@ add_files(
     date_type.h
     debug.cpp
     debug.h
+    debug_settings.h
     dedicated.cpp
+    departures.cpp
+    departures_func.h
+    departures_gui.cpp
+    departures_gui.h
+    departures_type.h
     depot.cpp
     depot_base.h
     depot_cmd.cpp
@@ -200,6 +208,8 @@ add_files(
     ini.cpp
     ini_load.cpp
     ini_type.h
+    infrastructure.cpp
+    infrastructure_func.h
     intro_gui.cpp
     landscape.cpp
     landscape.h
@@ -288,12 +298,22 @@ add_files(
     order_backup.h
     order_base.h
     order_cmd.cpp
+    order_cmd.h
     order_func.h
     order_gui.cpp
     order_type.h
     osk_gui.cpp
     pbs.cpp
     pbs.h
+    plans.cpp
+    plans_base.h
+    plans_cmd.cpp
+    plans_func.h
+    plans_gui.cpp
+    plans_type.h
+    programmable_signals.cpp
+    programmable_signals_gui.cpp
+    programmable_signals.h
     progress.cpp
     progress.h
     querystring_gui.h
@@ -322,10 +342,16 @@ add_files(
     roadveh_cmd.cpp
     roadveh_gui.cpp
     safeguards.h
+    schdispatch.h
+    schdispatch_cmd.cpp
+    schdispatch_gui.cpp
     screenshot_gui.cpp
     screenshot_gui.h
     screenshot.cpp
     screenshot.h
+    scope.h
+    scope_info.cpp
+    scope_info.h
     settings.cpp
     settings_func.h
     settings_gui.cpp
@@ -346,6 +372,7 @@ add_files(
     signs_type.h
     slope_func.h
     slope_type.h
+    smallmap_colours.h
     smallmap_gui.cpp
     smallmap_gui.h
     sortlist_type.h
@@ -376,6 +403,7 @@ add_files(
     string.cpp
     string_base.h
     string_func.h
+    string_func_extra.h
     string_type.h
     stringfilter.cpp
     stringfilter_type.h
@@ -388,6 +416,14 @@ add_files(
     subsidy_gui.cpp
     subsidy_type.h
     tar_type.h
+    tbtr_template_gui_main.cpp
+    tbtr_template_gui_create.cpp
+    tbtr_template_vehicle.cpp
+    tbtr_template_vehicle_func.cpp
+    tbtr_template_gui_main.h
+    tbtr_template_gui_create.h
+    tbtr_template_vehicle.h
+    tbtr_template_vehicle_func.h
     terraform_cmd.cpp
     terraform_gui.cpp
     terraform_gui.h
@@ -419,12 +455,16 @@ add_files(
     town.h
     town_cmd.cpp
     town_gui.cpp
+    town_gui.h
     town_kdtree.h
     town_map.h
     town_type.h
     townname.cpp
     townname_func.h
     townname_type.h
+    tracerestrict.cpp
+    tracerestrict.h
+    tracerestrict_gui.cpp
     track_func.h
     track_type.h
     train.h
@@ -437,11 +477,13 @@ add_files(
     tree_cmd.cpp
     tree_gui.cpp
     tree_map.h
+    tunnel_base.h
     tunnel_map.cpp
     tunnel_map.h
     tunnelbridge.h
     tunnelbridge_cmd.cpp
     tunnelbridge_map.h
+    unit_conversion.h
     vehicle.cpp
     vehicle_base.h
     vehicle_cmd.cpp
@@ -476,4 +518,7 @@ add_files(
     window_type.h
     zoom_func.h
     zoom_type.h
+    zoning.h
+    zoning_cmd.cpp
+    zoning_gui.cpp
 )

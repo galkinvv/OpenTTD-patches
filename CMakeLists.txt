@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.6)
 
 if (NOT BINARY_NAME)
     set(BINARY_NAME openttd)
@@ -55,12 +55,37 @@ if (NOT WIN32)
         find_library(AUDIOTOOLBOX_LIBRARY AudioToolbox)
         find_library(AUDIOUNIT_LIBRARY AudioUnit)
         find_library(COCOA_LIBRARY Cocoa)
+
+        find_package(MacUcontext)
     endif (NOT APPLE)
 endif (NOT WIN32)
 
 if (MSVC)
     find_package(Editbin REQUIRED)
+else ()
+    find_package(Builtins)
 endif (MSVC)
+
+if (UNIX)
+    find_package(DL)
+    find_package(Demangle)
+    find_package(Sigaction)
+    find_package(Sigaltstack)
+    find_package(SelfDbg)
+    find_package(Ucontext)
+    find_package(BFD)
+    find_package(Fcitx)
+    if (Fcitx_FOUND)
+        find_package(DBus1)
+        find_package(X11)
+    endif(Fcitx_FOUND)
+endif (UNIX)
+
+if (MINGW)
+    find_package(Demangle)
+    find_package(BFD)
+    find_package(DbgHelp)
+endif (MINGW)
 
 find_package(SSE)
 find_package(Xaudio2)
@@ -112,16 +137,6 @@ if (WIN32)
     list(APPEND GENERATED_SOURCE_FILES "${CMAKE_BINARY_DIR}/generated/ottdres.rc")
 endif (WIN32)
 
-# Generate a target to determine version, which is execute every 'make' run
-add_custom_target(find_version
-        ${CMAKE_COMMAND}
-                -DFIND_VERSION_BINARY_DIR=${CMAKE_BINARY_DIR}/generated
-                -DCPACK_BINARY_DIR=${CMAKE_BINARY_DIR}
-                -P "${CMAKE_SOURCE_DIR}/cmake/scripts/FindVersion.cmake"
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        BYPRODUCTS ${GENERATED_SOURCE_FILES}
-)
-
 include(SourceList)
 include(Endian)
 add_endian_definition()
@@ -140,9 +155,48 @@ add_executable(openttd WIN32 ${GENERATED_SOURCE_FILES})
 set_target_properties(openttd PROPERTIES OUTPUT_NAME "${BINARY_NAME}")
 # All other files are added via target_sources()
 
+set(host_tools_list strgen settingsgen)
+
+if(CMAKE_CROSSCOMPILING)
+    # Pawn off the creation of the host utilities into its own dedicated space
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/host_tools)
+    file(TO_NATIVE_PATH ${CMAKE_COMMAND} native_cmake_command)
+    file(TO_NATIVE_PATH ${CMAKE_CURRENT_SOURCE_DIR} native_cmake_current_source_dir)
+    execute_process(
+        COMMAND "${native_cmake_command}" "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}" "${native_cmake_current_source_dir}"
+                "-DCMAKE_C_COMPILER=/usr/bin/cc" "-DCMAKE_CXX_COMPILER=/usr/bin/c++"
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/host_tools
+    )
+
+    add_custom_target(host_tools
+        COMMAND ${CMAKE_COMMAND} --build . --target host_tools --config $<CONFIG>
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/host_tools
+    )
+    include(${CMAKE_CURRENT_BINARY_DIR}/host_tools/host_tools.cmake)
+
+    foreach(tgt IN ITEMS ${host_tools_list})
+        add_dependencies(host${tgt} host_tools)
+    endforeach()
+
+else()
+    # Add an empty target, host tools are built inplace
+    add_custom_target(host_tools
+        DEPENDS ${host_tools_list}
+    )
+endif()
+
 include(AddCustomXXXTimestamp)
 add_subdirectory(${CMAKE_SOURCE_DIR}/src)
 add_subdirectory(${CMAKE_SOURCE_DIR}/media/baseset)
+add_subdirectory(${CMAKE_SOURCE_DIR}/bin)
+
+if(NOT CMAKE_CROSSCOMPILING)
+    foreach(tgt IN ITEMS ${host_tools_list})
+        add_executable(host${tgt} ALIAS ${tgt})
+    endforeach()
+
+    export(TARGETS ${host_tools_list} NAMESPACE host FILE host_tools.cmake)
+endif()
 
 add_dependencies(openttd
     find_version)
@@ -151,6 +205,7 @@ target_link_libraries(openttd
     openttd::languages
     openttd::settings
     openttd::basesets
+    openttd::binfiles
     Threads::Threads
 )
 
@@ -182,6 +237,9 @@ if (NOT OPTION_DEDICATED)
     link_package(Fontconfig TARGET Fontconfig::Fontconfig)
     link_package(ICU_lx)
     link_package(ICU_i18n)
+    link_package(Fcitx)
+    link_package(DBus1)
+    link_package(X11)
 endif (NOT OPTION_DEDICATED)
 
 if (APPLE)
@@ -234,6 +292,7 @@ if (WIN32)
         ws2_32
         winmm
         imm32
+        usp10
     )
 endif (WIN32)
 
@@ -245,3 +304,26 @@ include(CreateRegression)
 create_regression()
 
 include(InstallAndPackage)
+
+get_property(CFG_DEFS DIRECTORY . PROPERTY COMPILE_OPTIONS)
+list(FILTER CFG_DEFS INCLUDE REGEX "^-D")
+
+# list TRANSFORM requires 3.12 or later
+#list(TRANSFORM CFG_DEFS REPLACE "^-D" "")
+string(REGEX REPLACE "(^|;)-D" "\\1" CFG_DEFS "${CFG_DEFS}")
+
+get_property(CFG_DEFS_2 DIRECTORY . PROPERTY COMPILE_DEFINITIONS)
+list(APPEND CFG_DEFS ${CFG_DEFS_2})
+list(FILTER CFG_DEFS EXCLUDE REGEX "_DIR=")
+
+# Generate a target to determine version, which is execute every 'make' run
+add_custom_target(find_version
+        ${CMAKE_COMMAND}
+                -DFIND_VERSION_BINARY_DIR=${CMAKE_BINARY_DIR}/generated
+                -DCPACK_BINARY_DIR=${CMAKE_BINARY_DIR}
+                -DCONFIGURE_DEFINES="${CFG_DEFS}"
+                $<$<PLATFORM_ID:Windows>:-DWIN32=TRUE>
+                -P "${CMAKE_SOURCE_DIR}/cmake/scripts/FindVersion.cmake"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        BYPRODUCTS ${GENERATED_SOURCE_FILES}
+)

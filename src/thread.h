@@ -13,6 +13,9 @@
 #include "debug.h"
 #include <system_error>
 #include <thread>
+#if defined(__MINGW32__)
+#include "3rdparty/mingw-std-threads/mingw.thread.h"
+#endif
 
 /** Signal used for signalling we knowingly want to end the thread. */
 class OTTDThreadExitSignal { };
@@ -32,6 +35,29 @@ inline void CSleep(int milliseconds)
  * @param name Name to set for the thread..
  */
 void SetCurrentThreadName(const char *name);
+
+/**
+ * Get the name of the current thread, if any.
+ * @param str The start of the buffer.
+ * @param last The last char of the buffer.
+ * @return Number of chars written to str.
+ */
+int GetCurrentThreadName(char *str, const char *last);
+
+/**
+ * Set the current thread as the "main" thread
+ */
+void SetSelfAsMainThread();
+
+/**
+ * @return true if the current thread definitely the "main" thread. If in doubt returns false.
+ */
+bool IsMainThread();
+
+/**
+ * @return true if the current thread definitely a "non-main" thread. If in doubt returns false.
+ */
+bool IsNonMainThread();
 
 
 /**
@@ -58,7 +84,7 @@ inline bool StartNewThread(std::thread *thr, const char *name, TFn&& _Fx, TArgs&
 				} catch (...) {
 					NOT_REACHED();
 				}
-			}, name, std::forward<TFn>(_Fx), std::forward<TArgs>(_Ax)...);
+			}, std::forward<const char *>(name), std::forward<TFn>(_Fx), std::forward<TArgs>(_Ax)...);
 
 		if (thr != nullptr) {
 			*thr = std::move(t);

@@ -1723,7 +1723,6 @@ STR_NETWORK_COMPANY_LIST_NEW_COMPANY                            :شركة جدي
 # Network client list
 STR_NETWORK_CLIENTLIST_KICK                                     :اطرد
 STR_NETWORK_CLIENTLIST_BAN                                      :بان
-STR_NETWORK_CLIENTLIST_GIVE_MONEY                               :اعط اموال
 STR_NETWORK_CLIENTLIST_SPEAK_TO_ALL                             :تحدث مع الكل
 STR_NETWORK_CLIENTLIST_SPEAK_TO_COMPANY                         :تحدث لشركة
 STR_NETWORK_CLIENTLIST_SPEAK_TO_CLIENT                          :رسالة خاصة
@@ -1732,7 +1731,6 @@ STR_NETWORK_SERVER                                              :خادم
 STR_NETWORK_CLIENT                                              :عميل
 STR_NETWORK_SPECTATORS                                          :المشاهدين
 
-STR_NETWORK_GIVE_MONEY_CAPTION                                  :{WHITE}ادخل رقم المبلغ الذى تود إعطائه
 
 # Network set password
 STR_COMPANY_PASSWORD_CANCEL                                     :{BLACK}لا تحفظ كلمة المرور المدخلة
@@ -2767,6 +2765,7 @@ STR_COMPANY_VIEW_VIEW_HQ_BUTTON                                 :{BLACK}عرض �
 STR_COMPANY_VIEW_VIEW_HQ_TOOLTIP                                :{BLACK}اعرض مقر الشركة
 STR_COMPANY_VIEW_RELOCATE_HQ                                    :{BLACK}اعادة بناء مقر الشركة
 STR_COMPANY_VIEW_RELOCATE_COMPANY_HEADQUARTERS                  :{BLACK}اعادة بناء مقر الشركة بمكان آخر و بتكلفة 1% من قيمة الشركة.
+STR_COMPANY_VIEW_GIVE_MONEY_BUTTON                              :{BLACK}اعط اموال
 
 STR_COMPANY_VIEW_NEW_FACE_BUTTON                                :{BLACK}وجة جديد
 STR_COMPANY_VIEW_NEW_FACE_TOOLTIP                               :{BLACK}اختر وجة جديد للمدير
@@ -2784,6 +2783,7 @@ STR_COMPANY_VIEW_SELL_SHARE_TOOLTIP                             :{BLACK}بيع 2
 
 STR_COMPANY_VIEW_COMPANY_NAME_QUERY_CAPTION                     :اسم الشركة
 STR_COMPANY_VIEW_PRESIDENT_S_NAME_QUERY_CAPTION                 :اسم صاحب الشركة
+STR_COMPANY_VIEW_GIVE_MONEY_QUERY_CAPTION                       :ادخل رقم المبلغ الذى تود إعطائه
 
 STR_BUY_COMPANY_MESSAGE                                         :{WHITE}نحن نبحث عن شركة لتشتري شركتنا.{}{} عل ترغب في شراء {COMPANY} بـ {CURRENCY_LONG}؟
 

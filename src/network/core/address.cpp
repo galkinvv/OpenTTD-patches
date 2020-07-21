@@ -97,12 +97,10 @@ void NetworkAddress::GetAddressAsString(char *buffer, const char *last, bool wit
  * @param with_family whether to add the family (e.g. IPvX).
  * @return the address
  */
-std::string NetworkAddress::GetAddressAsString(bool with_family)
+const char *NetworkAddressDumper::GetAddressAsString(NetworkAddress *addr, bool with_family)
 {
-	/* 6 = for the : and 5 for the decimal port number */
-	char buf[NETWORK_HOSTNAME_LENGTH + 6 + 7];
-	this->GetAddressAsString(buf, lastof(buf), with_family);
-	return buf;
+	addr->GetAddressAsString(this->buf, lastof(this->buf), with_family);
+	return this->buf;
 }
 
 /**
@@ -319,7 +317,7 @@ static SOCKET ConnectLoopProc(addrinfo *runp)
  */
 SOCKET NetworkAddress::Connect()
 {
-	DEBUG(net, 1, "Connecting to %s", this->GetAddressAsString().c_str());
+	DEBUG(net, 1, "Connecting to %s",  NetworkAddressDumper().GetAddressAsString(this));
 
 	return this->Resolve(AF_UNSPEC, SOCK_STREAM, AI_ADDRCONFIG, nullptr, ConnectLoopProc);
 }

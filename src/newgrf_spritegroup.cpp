@@ -13,6 +13,7 @@
 #include "newgrf_spritegroup.h"
 #include "newgrf_profiling.h"
 #include "core/pool_func.hpp"
+#include "vehicle_type.h"
 
 #include "safeguards.h"
 
@@ -198,6 +199,8 @@ static U EvalAdjustT(const DeterministicSpriteGroupAdjust *adjust, ScopeResolver
 	}
 }
 
+bool _sprite_group_resolve_check_veh_check = false;
+VehicleType _sprite_group_resolve_check_veh_type;
 
 static bool RangeHighComparator(const DeterministicSpriteGroupRange& range, uint32 value)
 {
@@ -218,6 +221,7 @@ const SpriteGroup *DeterministicSpriteGroup::Resolve(ResolverObject &object) con
 		/* Try to get the variable. We shall assume it is available, unless told otherwise. */
 		bool available = true;
 		if (adjust->variable == 0x7E) {
+			_sprite_group_resolve_check_veh_check = false;
 			const SpriteGroup *subgroup = SpriteGroup::Resolve(adjust->subroutine, object, false);
 			if (subgroup == nullptr) {
 				value = CALLBACK_FAILED;
@@ -227,8 +231,56 @@ const SpriteGroup *DeterministicSpriteGroup::Resolve(ResolverObject &object) con
 
 			/* Note: 'last_value' and 'reseed' are shared between the main chain and the procedure */
 		} else if (adjust->variable == 0x7B) {
+			_sprite_group_resolve_check_veh_check = false;
 			value = GetVariable(object, scope, adjust->parameter, last_value, &available);
 		} else {
+			if (_sprite_group_resolve_check_veh_check) {
+				switch (adjust->variable) {
+					// whitelist of variables which can be checked without requiring an immediate re-check on the next tick
+					case 0xC:
+					case 0x1A:
+					case 0x1C:
+					case 0x25:
+					case 0x40:
+					case 0x41:
+					case 0x42:
+					case 0x47:
+					case 0x49:
+					case 0x4B:
+					case 0x4D:
+					case 0x60:
+					case 0x7D:
+					case 0x7F:
+					case 0x80 + 0x0:
+					case 0x80 + 0x1:
+					case 0x80 + 0x4:
+					case 0x80 + 0x5:
+					case 0x80 + 0x39:
+					case 0x80 + 0x3A:
+					case 0x80 + 0x3B:
+					case 0x80 + 0x3C:
+					case 0x80 + 0x3D:
+					case 0x80 + 0x44:
+					case 0x80 + 0x45:
+					case 0x80 + 0x46:
+					case 0x80 + 0x47:
+					case 0x80 + 0x5A:
+					case 0x80 + 0x72:
+					case 0x80 + 0x7A:
+						break;
+
+					case 0x80 + 0x62:
+						// RoadVehicle::state
+						if (_sprite_group_resolve_check_veh_type != VEH_ROAD) {
+							_sprite_group_resolve_check_veh_check = false;
+						}
+						break;
+
+					default:
+						_sprite_group_resolve_check_veh_check = false;
+						break;
+				}
+			}
 			value = GetVariable(object, scope, adjust->variable, adjust->parameter, &available);
 		}
 

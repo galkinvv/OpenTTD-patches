@@ -46,6 +46,9 @@ enum SettingGuiFlag : uint16 {
 	SGF_NEWGAME_ONLY = 1 << 6, ///< this setting cannot be changed in a game
 	SGF_SCENEDIT_TOO = 1 << 7, ///< this setting can be changed in the scenario editor (only makes sense when SGF_NEWGAME_ONLY is set)
 	SGF_PER_COMPANY  = 1 << 8, ///< this setting can be different for each company (saved in company struct)
+	SGF_DECIMAL1     = 1 << 9, ///< display a decimal representation of the setting value divided by 10
+	SGF_ENUM         = 1 << 10,///< the setting can take one of the values given by an array of struct SettingDescEnumEntry
+	SGF_NO_NEWGAME   = 1 << 11,///< the setting does not apply and is not shown in a new game context
 };
 DECLARE_ENUM_AS_BIT_SET(SettingGuiFlag)
 
@@ -86,6 +89,14 @@ enum SettingType {
 
 typedef bool OnChange(int32 var);           ///< callback prototype on data modification
 typedef size_t OnConvert(const char *value); ///< callback prototype for conversion error
+typedef int OnGuiOrder(uint nth);            ///< callback prototype for GUI ordering
+typedef int64 OnXrefValueConvert(int64 val); ///< callback prototype for xref value conversion
+
+/** The last entry in an array of struct SettingDescEnumEntry must use STR_NULL. */
+struct SettingDescEnumEntry {
+	int32 val;
+	StringID str;
+};
 
 /** Properties of config file settings. */
 struct SettingDescBase {
@@ -103,11 +114,23 @@ struct SettingDescBase {
 	OnChange *proc;         ///< callback procedure for when the value is changed
 	OnConvert *proc_cnvt;   ///< callback procedure when loading value mechanism fails
 	SettingCategory cat;    ///< assigned categories of the setting
+	const SettingDescEnumEntry *enumlist; ///< For SGF_ENUM. The last entry must use STR_NULL
+};
+
+struct SettingsXref {
+	const char *target;
+	OnXrefValueConvert *conv;
+
+	SettingsXref() : target(nullptr), conv(nullptr) {}
+	SettingsXref(const char *target_, OnXrefValueConvert *conv_) : target(target_), conv(conv_) {}
 };
 
 struct SettingDesc {
 	SettingDescBase desc;   ///< Settings structure (going to configuration file)
 	SaveLoad save;          ///< Internal structure (going to savegame, parts to config)
+	const char *patx_name;  ///< Name to save/load setting from in PATX chunk, if nullptr save/load from PATS chunk as normal
+	SettingsXref xref;      ///< Details of SettingDesc to use instead of the contents of this one, useful for loading legacy savegames, if target field nullptr save/load as normal
+	OnGuiOrder *orderproc;  ///< Callback procedure for GUI re-ordering
 
 	bool IsEditable(bool do_command = false) const;
 	SettingType GetType() const;
@@ -122,7 +145,7 @@ struct SettingDesc {
  * offset in a certain struct */
 typedef SettingDesc SettingDescGlobVarList;
 
-const SettingDesc *GetSettingFromName(const char *name, uint *i);
+const SettingDesc *GetSettingFromName(const char *name, uint *i, bool ignore_version = false);
 bool SetSettingValue(uint index, int32 value, bool force_newgame = false);
 bool SetSettingValue(uint index, const char *value, bool force_newgame = false);
 void SetCompanySetting(uint index, int32 value);

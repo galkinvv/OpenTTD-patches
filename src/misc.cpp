@@ -30,6 +30,13 @@
 #include "town_kdtree.h"
 #include "viewport_kdtree.h"
 #include "newgrf_profiling.h"
+#include "tracerestrict.h"
+#include "programmable_signals.h"
+#include "viewport_func.h"
+#include "bridge_signal_map.h"
+#include "command_func.h"
+#include "zoning.h"
+#include "cargopacket.h"
 
 #include "safeguards.h"
 
@@ -63,11 +70,24 @@ void InitializeGame(uint size_x, uint size_y, bool reset_date, bool reset_settin
 
 	AllocateMap(size_x, size_y);
 
+	ViewportMapClearTunnelCache();
+	ClearCommandLog();
+	ClearDesyncMsgLog();
+
 	_pause_mode = PM_UNPAUSED;
 	_fast_forward = 0;
 	_tick_counter = 0;
+	_tick_skip_counter = 0;
 	_cur_tileloop_tile = 1;
 	_thd.redsq = INVALID_TILE;
+	_road_layout_change_counter = 0;
+	_game_events_since_load = (GameEventFlags) 0;
+	_game_events_overall = (GameEventFlags) 0;
+	_game_load_cur_date_ymd = { 0, 0, 0 };
+	_game_load_date_fract = 0;
+	_game_load_tick_skip_counter = 0;
+	_game_load_time = 0;
+	_loadgame_DBGL_data.clear();
 	if (reset_settings) MakeNewgameSettingsLive();
 
 	_newgrf_profilers.clear();
@@ -75,14 +95,25 @@ void InitializeGame(uint size_x, uint size_y, bool reset_date, bool reset_settin
 	if (reset_date) {
 		SetDate(ConvertYMDToDate(_settings_game.game_creation.starting_year, 0, 1), 0);
 		InitializeOldNames();
+	} else {
+		SetScaledTickVariables();
 	}
 
 	LinkGraphSchedule::Clear();
+	ClearTraceRestrictMapping();
+	ClearBridgeSimulatedSignalMapping();
+	ClearCargoPacketDeferredPayments();
 	PoolBase::Clean(PT_NORMAL);
 
 	RebuildStationKdtree();
 	RebuildTownKdtree();
 	RebuildViewportKdtree();
+
+	FreeSignalPrograms();
+	FreeSignalDependencies();
+
+	ClearZoningCaches();
+	IntialiseOrderDestinationRefcountMap();
 
 	ResetPersistentNewGRFData();
 
@@ -119,7 +150,11 @@ void InitializeGame(uint size_x, uint size_y, bool reset_date, bool reset_settin
 
 	InitializeEconomy();
 
+	InvalidateVehicleTickCaches();
+	ClearVehicleTickCaches();
+
 	ResetObjectToPlace();
+	ResetRailPlacementSnapping();
 
 	GamelogReset();
 	GamelogStartAction(GLAT_START);

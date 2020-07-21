@@ -41,6 +41,11 @@ void Blitter_8bppBase::DrawLine(void *video, int x, int y, int x2, int y2, int s
 	});
 }
 
+void Blitter_8bppBase::SetLine(void *video, int x, int y, uint8 *colours, uint width)
+{
+	memcpy((uint8 *)video + x + y * _screen.pitch, colours, width * sizeof(uint8));
+}
+
 void Blitter_8bppBase::DrawRect(void *video, int width, int height, uint8 colour)
 {
 	do {
@@ -85,7 +90,7 @@ void Blitter_8bppBase::CopyImageToBuffer(const void *video, void *dst, int width
 	}
 }
 
-void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width, int &height, int scroll_x, int scroll_y)
+void Blitter_8bppBase::ScrollBuffer(void *video, int left, int top, int width, int height, int scroll_x, int scroll_y)
 {
 	const uint8 *src;
 	uint8 *dst;

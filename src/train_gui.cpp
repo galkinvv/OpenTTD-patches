@@ -19,6 +19,8 @@
 
 #include "safeguards.h"
 
+uint16 GetTrainVehicleMaxSpeed(const Train *u, const RailVehicleInfo *rvi_u, const Train *front);
+
 /**
  * Callback for building wagons.
  * @param result The result of the command.
@@ -34,7 +36,7 @@ void CcBuildWagon(const CommandCost &result, TileIndex tile, uint32 p1, uint32 p
 	/* find a locomotive in the depot. */
 	const Vehicle *found = nullptr;
 	for (const Train *t : Train::Iterate()) {
-		if (t->IsFrontEngine() && t->tile == tile && t->IsStoppedInDepot()) {
+		if (t->IsFrontEngine() && t->tile == tile && t->IsStoppedInDepot() && !t->IsVirtual()) {
 			if (found != nullptr) return; // must be exactly one.
 			found = t;
 		}
@@ -46,6 +48,8 @@ void CcBuildWagon(const CommandCost &result, TileIndex tile, uint32 p1, uint32 p
 		/* put the new wagon at the end of the loco. */
 		DoCommandP(0, _new_vehicle_id, found->index, CMD_MOVE_RAIL_VEHICLE);
 		InvalidateWindowClassesData(WC_TRAINS_LIST, 0);
+		InvalidateWindowClassesData(WC_TRACE_RESTRICT_SLOTS, 0);
+		InvalidateWindowClassesData(WC_DEPARTURES_BOARD, 0);
 	}
 }
 
@@ -221,17 +225,70 @@ static void TrainDetailsCargoTab(const CargoSummaryItem *item, int left, int rig
  * @param right The right most coordinate to draw
  * @param y     The y coordinate
  */
-static void TrainDetailsInfoTab(const Vehicle *v, int left, int right, int y)
+static void TrainDetailsInfoTab(const Train *v, int left, int right, int y, byte line_number)
 {
-	if (RailVehInfo(v->engine_type)->railveh_type == RAILVEH_WAGON) {
+	const RailVehicleInfo *rvi = RailVehInfo(v->engine_type);
+	bool show_speed = !UsesWagonOverride(v) && (_settings_game.vehicle.wagon_speed_limits || rvi->railveh_type != RAILVEH_WAGON);
+	uint16 speed;
+
+	if (rvi->railveh_type == RAILVEH_WAGON) {
 		SetDParam(0, v->engine_type);
 		SetDParam(1, v->value);
-		DrawString(left, right, y, STR_VEHICLE_DETAILS_TRAIN_WAGON_VALUE);
+
+		if (show_speed && (speed = GetVehicleProperty(v, PROP_TRAIN_SPEED, rvi->max_speed))) {
+			SetDParam(2, speed); // StringID++
+			DrawString(left, right, y, STR_VEHICLE_DETAILS_TRAIN_WAGON_VALUE_AND_SPEED);
+		} else {
+			DrawString(left, right, y, STR_VEHICLE_DETAILS_TRAIN_WAGON_VALUE);
+		}
 	} else {
-		SetDParam(0, v->engine_type);
-		SetDParam(1, v->build_year);
-		SetDParam(2, v->value);
-		DrawString(left, right, y, STR_VEHICLE_DETAILS_TRAIN_ENGINE_BUILT_AND_VALUE);
+		switch (line_number) {
+			case 0:
+				SetDParam(0, v->engine_type);
+				SetDParam(1, v->build_year);
+				SetDParam(2, v->value);
+
+				if (show_speed && (speed = GetVehicleProperty(v, PROP_TRAIN_SPEED, rvi->max_speed))) {
+					SetDParam(3, speed); // StringID++
+					DrawString(left, right, y, STR_VEHICLE_DETAILS_TRAIN_ENGINE_BUILT_AND_VALUE_AND_SPEED, TC_FROMSTRING, SA_LEFT);
+				} else {
+					DrawString(left, right, y, STR_VEHICLE_DETAILS_TRAIN_ENGINE_BUILT_AND_VALUE);
+				}
+				break;
+
+			case 1:
+				SetDParam(0, v->reliability * 100 >> 16);
+				SetDParam(1, v->breakdowns_since_last_service);
+				DrawString(left, right, y, STR_VEHICLE_INFO_RELIABILITY_BREAKDOWNS, TC_FROMSTRING, SA_LEFT);
+				break;
+
+			case 2:
+				if (v->breakdown_ctr == 1) {
+					if (_settings_game.vehicle.improved_breakdowns) {
+						SetDParam(0, STR_VEHICLE_STATUS_BROKEN_DOWN_VEL_SHORT);
+						SetDParam(1, STR_BREAKDOWN_TYPE_CRITICAL + v->breakdown_type);
+						if (v->breakdown_type == BREAKDOWN_LOW_SPEED) {
+							SetDParam(2, min(v->First()->GetCurrentMaxSpeed(), v->breakdown_severity));
+						} else if (v->breakdown_type == BREAKDOWN_LOW_POWER) {
+							SetDParam(2, v->breakdown_severity * 100 / 256);
+						}
+					} else {
+						SetDParam(0, STR_VEHICLE_STATUS_BROKEN_DOWN);
+					}
+				} else {
+					if (HasBit(v->flags, VRF_NEED_REPAIR)) {
+						SetDParam(0, STR_NEED_REPAIR);
+						SetDParam(1, GetTrainVehicleMaxSpeed(v, &(v->GetEngine()->u.rail), v->First()));
+					} else {
+						SetDParam(0, STR_RUNNING);
+					}
+				}
+				DrawString(left, right, y, STR_CURRENT_STATUS);
+				break;
+
+			default:
+				NOT_REACHED();
+		}
 	}
 }
 
@@ -342,6 +399,7 @@ int GetTrainDetailsWndVScroll(VehicleID veh_id, TrainDetailsWindowTabs det_tab)
 			uint length = GetLengthOfArticulatedVehicle(v);
 			if (length > TRAIN_DETAILS_MAX_INDENT) num++;
 		}
+		if (det_tab == 1) num += 2 * Train::Get(veh_id)->tcache.cached_num_engines;
 	}
 
 	return num;
@@ -373,6 +431,7 @@ void DrawTrainDetails(const Train *v, int left, int right, int y, int vscroll_po
 		bool rtl = _current_text_dir == TD_RTL;
 		Direction dir = rtl ? DIR_E : DIR_W;
 		int x = rtl ? right : left;
+		byte line_number = 0;
 		for (; v != nullptr && vscroll_pos > -vscroll_cap; v = v->GetNextVehicle()) {
 			GetCargoSummaryOfArticulatedVehicle(v, &_cargo_summary);
 
@@ -383,7 +442,7 @@ void DrawTrainDetails(const Train *v, int left, int right, int y, int vscroll_po
 			do {
 				Point offset;
 				int width = u->GetDisplayImageWidth(&offset);
-				if (vscroll_pos <= 0 && vscroll_pos > -vscroll_cap) {
+				if (vscroll_pos <= 0 && vscroll_pos > -vscroll_cap && line_number == 0) {
 					int pitch = 0;
 					const Engine *e = Engine::Get(v->engine_type);
 					if (e->GetGRF() != nullptr) {
@@ -406,7 +465,7 @@ void DrawTrainDetails(const Train *v, int left, int right, int y, int vscroll_po
 			}
 
 			uint num_lines = max(1u, (unsigned)_cargo_summary.size());
-			for (uint i = 0; i < num_lines; i++) {
+			for (uint i = 0; i < num_lines;) {
 				int sprite_width = max<int>(dx, ScaleGUITrad(TRAIN_DETAILS_MIN_INDENT)) + 3;
 				int data_left  = left + (rtl ? 0 : sprite_width);
 				int data_right = right - (rtl ? sprite_width : 0);
@@ -425,7 +484,7 @@ void DrawTrainDetails(const Train *v, int left, int right, int y, int vscroll_po
 							break;
 
 						case TDW_TAB_INFO:
-							if (i == 0) TrainDetailsInfoTab(v, data_left, data_right, py);
+							if (i == 0) TrainDetailsInfoTab(v, data_left, data_right, py, line_number);
 							break;
 
 						case TDW_TAB_CAPACITY:
@@ -439,6 +498,12 @@ void DrawTrainDetails(const Train *v, int left, int right, int y, int vscroll_po
 
 						default: NOT_REACHED();
 					}
+				}
+				if (det_tab != 1 || line_number >= (Train::From(v)->IsWagon() ? 0 : 2)) {
+					line_number = 0;
+					i++;
+				} else {
+					line_number++;
 				}
 				vscroll_pos--;
 			}

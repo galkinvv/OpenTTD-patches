@@ -38,6 +38,16 @@
 #include "engine_base.h"
 #include "game/game.hpp"
 #include "table/strings.h"
+#include "aircraft.h"
+#include "airport.h"
+#include "station_base.h"
+#include "waypoint_base.h"
+#include "waypoint_func.h"
+#include "economy_func.h"
+#include "town.h"
+#include "industry.h"
+#include "string_func_extra.h"
+#include "linkgraph/linkgraphjob.h"
 #include <time.h>
 
 #include "safeguards.h"
@@ -80,7 +90,6 @@ static ConsoleFileList _console_file_list; ///< File storage cache for the conso
 /* console command defines */
 #define DEF_CONSOLE_CMD(function) static bool function(byte argc, char *argv[])
 #define DEF_CONSOLE_HOOK(function) static ConsoleHookResult function(bool echo)
-
 
 /****************
  * command hooks
@@ -283,6 +292,54 @@ DEF_CONSOLE_CMD(ConScrollToTile)
 					return true;
 				}
 				ScrollMainWindowToTile(TileXY(x, y));
+				return true;
+			}
+			break;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Highlight a tile on the map.
+ * param x tile number or tile x coordinate.
+ * param y optional y coordinate.
+ * @note When only one argument is given it is intepreted as the tile number.
+ *       When two arguments are given, they are interpreted as the tile's x
+ *       and y coordinates.
+ * @return True when either console help was shown or a proper amount of parameters given.
+ */
+DEF_CONSOLE_CMD(ConHighlightTile)
+{
+	switch (argc) {
+		case 0:
+			IConsoleHelp("Highlight a given tile.");
+			IConsoleHelp("Usage: 'highlight_tile <tile>' or 'highlight_tile <x> <y>'");
+			IConsoleHelp("Numbers can be either decimal (34161) or hexadecimal (0x4a5B).");
+			return true;
+
+		case 2: {
+			uint32 result;
+			if (GetArgumentInteger(&result, argv[1])) {
+				if (result >= MapSize()) {
+					IConsolePrint(CC_ERROR, "Tile does not exist");
+					return true;
+				}
+				SetRedErrorSquare((TileIndex)result);
+				return true;
+			}
+			break;
+		}
+
+		case 3: {
+			uint32 x, y;
+			if (GetArgumentInteger(&x, argv[1]) && GetArgumentInteger(&y, argv[2])) {
+				if (x >= MapSizeX() || y >= MapSizeY()) {
+					IConsolePrint(CC_ERROR, "Tile does not exist");
+					return true;
+				}
+				SetRedErrorSquare(TileXY(x, y));
 				return true;
 			}
 			break;
@@ -664,6 +721,21 @@ DEF_CONSOLE_CMD(ConRcon)
 		IConsoleCmdExec(argv[2]);
 	} else {
 		NetworkClientSendRcon(argv[1], argv[2]);
+	}
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConSettingsAccess)
+{
+	if (argc == 0) {
+		IConsoleHelp("Enable changing game settings from this client. Usage: 'settings_access <password>'");
+		return true;
+	}
+
+	if (argc < 2) return false;
+
+	if (!_network_server) {
+		NetworkClientSendSettingsPassword(argv[1]);
 	}
 	return true;
 }
@@ -1080,15 +1152,9 @@ DEF_CONSOLE_CMD(ConRestart)
  */
 static void PrintLineByLine(char *buf)
 {
-	char *p = buf;
-	/* Print output line by line */
-	for (char *p2 = buf; *p2 != '\0'; p2++) {
-		if (*p2 == '\n') {
-			*p2 = '\0';
-			IConsolePrintF(CC_DEFAULT, "%s", p);
-			p = p2 + 1;
-		}
-	}
+	ProcessLineByLine(buf, [&](const char *line) {
+		IConsolePrintF(CC_DEFAULT, "%s", line);
+	});
 }
 
 DEF_CONSOLE_CMD(ConListAILibs)
@@ -1326,9 +1392,7 @@ DEF_CONSOLE_CMD(ConGetDate)
 		return true;
 	}
 
-	YearMonthDay ymd;
-	ConvertDateToYMD(_date, &ymd);
-	IConsolePrintF(CC_DEFAULT, "Date: %04d-%02d-%02d", ymd.year, ymd.month + 1, ymd.day);
+	IConsolePrintF(CC_DEFAULT, "Date: %04d-%02d-%02d", _cur_date_ymd.year, _cur_date_ymd.month + 1, _cur_date_ymd.day);
 	return true;
 }
 
@@ -1411,6 +1475,29 @@ DEF_CONSOLE_CMD(ConScreenShot)
 	}
 
 	MakeScreenshot(type, name);
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConMinimap)
+{
+	if (argc == 0) {
+		IConsoleHelp("Create a flat image of the game minimap. Usage: 'minimap [owner] [file name]'");
+		IConsoleHelp("'owner' uses the tile owner to colour the minimap image, this is the only mode at present");
+		return true;
+	}
+
+	const char *name = nullptr;
+	if (argc > 1) {
+		if (strcmp(argv[1], "owner") != 0) {
+			/* invalid mode */
+			return false;
+		}
+	}
+	if (argc > 2) {
+		name = argv[2];
+	}
+
+	MakeMinimapWorldScreenshot(name);
 	return true;
 }
 
@@ -1531,7 +1618,7 @@ DEF_CONSOLE_CMD(ConListCommands)
 
 	for (const IConsoleCmd *cmd = _iconsole_cmds; cmd != nullptr; cmd = cmd->next) {
 		if (argv[1] == nullptr || strstr(cmd->name, argv[1]) != nullptr) {
-			if (cmd->hook == nullptr || cmd->hook(false) != CHR_HIDE) IConsolePrintF(CC_DEFAULT, "%s", cmd->name);
+			if (cmd->unlisted == false && (cmd->hook == nullptr || cmd->hook(false) != CHR_HIDE)) IConsolePrintF(CC_DEFAULT, "%s", cmd->name);
 		}
 	}
 
@@ -1896,6 +1983,372 @@ DEF_CONSOLE_CMD(ConNewGRFReload)
 	}
 
 	ReloadNewGRFData();
+
+	extern void PostCheckNewGRFLoadWarnings();
+	PostCheckNewGRFLoadWarnings();
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConResetBlockedHeliports)
+{
+	if (argc == 0) {
+		IConsoleHelp("Resets heliports blocked by the improved breakdowns bug, for single-player use only.");
+		return true;
+	}
+
+	unsigned int count = 0;
+	for (Station *st : Station::Iterate()) {
+		if (st->airport.tile == INVALID_TILE) continue;
+		if (st->airport.HasHangar()) continue;
+		if (!st->airport.flags) continue;
+
+		bool occupied = false;
+		for (const Aircraft *a : Aircraft::Iterate()) {
+			if (a->targetairport == st->index && a->state != FLYING) {
+				occupied = true;
+				break;
+			}
+		}
+		if (!occupied) {
+			st->airport.flags = 0;
+			count++;
+			char buffer[256];
+			SetDParam(0, st->index);
+			GetString(buffer, STR_STATION_NAME, lastof(buffer));
+			IConsolePrintF(CC_DEFAULT, "Unblocked: %s", buffer);
+		}
+	}
+
+	IConsolePrintF(CC_DEFAULT, "Unblocked %u heliports", count);
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConMergeLinkgraphJobsAsap)
+{
+	if (argc == 0) {
+		IConsoleHelp("Merge linkgraph jobs asap, for single-player use only.");
+		return true;
+	}
+
+	for (LinkGraphJob *lgj : LinkGraphJob::Iterate()) lgj->ShiftJoinDate((((_date * DAY_TICKS) + _date_fract) - lgj->JoinDateTicks()) / DAY_TICKS);
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConDumpCommandLog)
+{
+	if (argc == 0) {
+		IConsoleHelp("Dump log of recently executed commands.");
+		return true;
+	}
+
+	char buffer[32768];
+	DumpCommandLog(buffer, lastof(buffer));
+	PrintLineByLine(buffer);
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConDumpInflation)
+{
+	if (argc == 0) {
+		IConsoleHelp("Dump inflation data.");
+		return true;
+	}
+
+	IConsolePrintF(CC_DEFAULT, "interest_rate: %u", _economy.interest_rate);
+	IConsolePrintF(CC_DEFAULT, "infl_amount: %u", _economy.infl_amount);
+	IConsolePrintF(CC_DEFAULT, "infl_amount_pr: %u", _economy.infl_amount_pr);
+	IConsolePrintF(CC_DEFAULT, "inflation_prices: %f", _economy.inflation_prices / 65536.0);
+	IConsolePrintF(CC_DEFAULT, "inflation_payment: %f", _economy.inflation_payment / 65536.0);
+	IConsolePrintF(CC_DEFAULT, "inflation ratio: %f", (double) _economy.inflation_prices / (double) _economy.inflation_payment);
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConDumpCpdpStats)
+{
+	if (argc == 0) {
+		IConsoleHelp("Dump cargo packet deferred payment stats.");
+		return true;
+	}
+
+	extern void DumpCargoPacketDeferredPaymentStats(char *buffer, const char *last);
+	char buffer[32768];
+	DumpCargoPacketDeferredPaymentStats(buffer, lastof(buffer));
+	PrintLineByLine(buffer);
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConVehicleStats)
+{
+	if (argc == 0) {
+		IConsoleHelp("Dump vehicle stats.");
+		return true;
+	}
+
+	extern void DumpVehicleStats(char *buffer, const char *last);
+	char buffer[32768];
+	DumpVehicleStats(buffer, lastof(buffer));
+	PrintLineByLine(buffer);
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConMapStats)
+{
+	if (argc == 0) {
+		IConsoleHelp("Dump map stats.");
+		return true;
+	}
+
+	extern void DumpMapStats(char *b, const char *last);
+	char buffer[32768];
+	DumpMapStats(buffer, lastof(buffer));
+	PrintLineByLine(buffer);
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConStFlowStats)
+{
+	if (argc == 0) {
+		IConsoleHelp("Dump station flow stats.");
+		return true;
+	}
+
+	extern void DumpStationFlowStats(char *b, const char *last);
+	char buffer[32768];
+	DumpStationFlowStats(buffer, lastof(buffer));
+	PrintLineByLine(buffer);
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConDumpGameEvents)
+{
+	if (argc == 0) {
+		IConsoleHelp("Dump game events.");
+		return true;
+	}
+
+	char buffer[256];
+	DumpGameEventFlags(_game_events_since_load, buffer, lastof(buffer));
+	IConsolePrintF(CC_DEFAULT, "Since load: %s", buffer);
+	DumpGameEventFlags(_game_events_overall, buffer, lastof(buffer));
+	IConsolePrintF(CC_DEFAULT, "Overall: %s", buffer);
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConDumpLoadDebugLog)
+{
+	if (argc == 0) {
+		IConsoleHelp("Dump load debug log.");
+		return true;
+	}
+
+	std::string dbgl = _loadgame_DBGL_data;
+	PrintLineByLine(const_cast<char *>(dbgl.c_str()));
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConDumpLoadDebugConfig)
+{
+	if (argc == 0) {
+		IConsoleHelp("Dump load debug config.");
+		return true;
+	}
+
+	std::string dbgc = _loadgame_DBGC_data;
+	PrintLineByLine(const_cast<char *>(dbgc.c_str()));
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConCheckCaches)
+{
+	if (argc == 0) {
+		IConsoleHelp("Debug: Check caches");
+		return true;
+	}
+
+	if (argc > 2) return false;
+
+	bool broadcast = (argc == 2 && atoi(argv[1]) > 0 && (!_networking || _network_server));
+	if (broadcast) {
+		DoCommandP(0, 0, 0, CMD_DESYNC_CHECK);
+	} else {
+		extern void CheckCaches(bool force_check, std::function<void(const char *)> log);
+		CheckCaches(true, nullptr);
+	}
+
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConShowTownWindow)
+{
+	if (argc != 2) {
+		IConsoleHelp("Debug: Show town window.  Usage: 'show_town_window <town-id>'");
+		return true;
+	}
+
+	if (_game_mode != GM_NORMAL && _game_mode != GM_EDITOR) {
+		return true;
+	}
+
+	TownID town_id = (TownID)(atoi(argv[1]));
+	if (!Town::IsValidID(town_id)) {
+		return true;
+	}
+
+	ShowTownViewWindow(town_id);
+
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConShowStationWindow)
+{
+	if (argc != 2) {
+		IConsoleHelp("Debug: Show station window.  Usage: 'show_station_window <station-id>'");
+		return true;
+	}
+
+	if (_game_mode != GM_NORMAL && _game_mode != GM_EDITOR) {
+		return true;
+	}
+
+	const BaseStation *bst = BaseStation::GetIfValid(atoi(argv[1]));
+	if (bst == nullptr) return true;
+	if (bst->facilities & FACIL_WAYPOINT) {
+		ShowWaypointWindow(Waypoint::From(bst));
+	} else {
+		ShowStationViewWindow(bst->index);
+	}
+
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConShowIndustryWindow)
+{
+	if (argc != 2) {
+		IConsoleHelp("Debug: Show industry window.  Usage: 'show_industry_window <industry-id>'");
+		return true;
+	}
+
+	if (_game_mode != GM_NORMAL && _game_mode != GM_EDITOR) {
+		return true;
+	}
+
+	IndustryID ind_id = (IndustryID)(atoi(argv[1]));
+	if (!Industry::IsValidID(ind_id)) {
+		return true;
+	}
+
+	extern void ShowIndustryViewWindow(int industry);
+	ShowIndustryViewWindow(ind_id);
+
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConViewportDebug)
+{
+	if (argc < 1 || argc > 2) {
+		IConsoleHelp("Debug: viewports flags.  Usage: 'viewport_debug [<flags>]'");
+		return true;
+	}
+
+	extern uint32 _viewport_debug_flags;
+	if (argc == 1) {
+		IConsolePrintF(CC_DEFAULT, "Viewport debug flags: %X", _viewport_debug_flags);
+	} else {
+		_viewport_debug_flags = strtoul(argv[1], nullptr, 16);
+	}
+
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConViewportMarkDirty)
+{
+	if (argc < 3 || argc > 5) {
+		IConsoleHelp("Debug: Mark main viewport dirty.  Usage: 'viewport_mark_dirty <x> <y> [<w> <h>]'");
+		return true;
+	}
+
+	ViewPort *vp = FindWindowByClass(WC_MAIN_WINDOW)->viewport;
+	uint l = strtoul(argv[1], nullptr, 0);
+	uint t = strtoul(argv[2], nullptr, 0);
+	uint r = min<uint>(l + ((argc > 3) ? strtoul(argv[3], nullptr, 0) : 1), vp->dirty_blocks_per_row);
+	uint b = min<uint>(t + ((argc > 4) ? strtoul(argv[4], nullptr, 0) : 1), vp->dirty_blocks_per_column);
+	for (uint x = l; x < r; x++) {
+		for (uint y = t; y < b; y++) {
+			vp->dirty_blocks[(x * vp->dirty_blocks_per_column) + y] = true;
+		}
+	}
+	vp->is_dirty = true;
+
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConDoDisaster)
+{
+	if (argc == 0) {
+		IConsoleHelp("Debug: Do disaster");
+		return true;
+	}
+
+	extern void DoDisaster();
+	DoDisaster();
+
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConBankruptCompany)
+{
+	if (argc != 2) {
+		IConsoleHelp("Debug: Mark company as bankrupt.  Usage: 'bankrupt_company <company-id>'");
+		return true;
+	}
+
+	if (_game_mode != GM_NORMAL) {
+		IConsoleWarning("Companies can only be managed in a game.");
+		return true;
+	}
+
+	CompanyID company_id = (CompanyID)(atoi(argv[1]) - 1);
+	if (!Company::IsValidID(company_id)) {
+		IConsolePrintF(CC_DEFAULT, "Unknown company. Company range is between 1 and %d.", MAX_COMPANIES);
+		return true;
+	}
+
+	Company *c = Company::Get(company_id);
+	c->bankrupt_value = 42;
+	c->bankrupt_asked = 1 << c->index; // Don't ask the owner
+	c->bankrupt_timeout = 0;
+	c->money = -(UINT64_MAX >> 2);
+	IConsolePrint(CC_DEFAULT, "Company marked as bankrupt.");
+
+	return true;
+}
+
+DEF_CONSOLE_CMD(ConDeleteCompany)
+{
+	if (argc != 2) {
+		IConsoleHelp("Debug: Delete company.  Usage: 'delete_company <company-id>'");
+		return true;
+	}
+
+	if (_game_mode != GM_NORMAL) {
+		IConsoleWarning("Companies can only be managed in a game.");
+		return true;
+	}
+
+	CompanyID company_id = (CompanyID)(atoi(argv[1]) - 1);
+	if (!Company::IsValidID(company_id)) {
+		IConsolePrintF(CC_DEFAULT, "Unknown company. Company range is between 1 and %d.", MAX_COMPANIES);
+		return true;
+	}
+
+	if (company_id == _local_company) {
+		IConsoleWarning("Cannot delete current company.");
+		return true;
+	}
+
+	DoCommandP(0, CCA_DELETE | company_id << 16 | CRR_MANUAL << 24, 0, CMD_COMPANY_CTRL);
+	IConsolePrint(CC_DEFAULT, "Company deleted.");
+
 	return true;
 }
 
@@ -2098,8 +2551,11 @@ void IConsoleStdLibRegister()
 	IConsoleCmdRegister("reset_enginepool", ConResetEnginePool, ConHookNoNetwork);
 	IConsoleCmdRegister("return",       ConReturn);
 	IConsoleCmdRegister("screenshot",   ConScreenShot);
+	IConsoleCmdRegister("minimap",      ConMinimap);
 	IConsoleCmdRegister("script",       ConScript);
 	IConsoleCmdRegister("scrollto",     ConScrollToTile);
+	IConsoleCmdRegister("highlight_tile", ConHighlightTile);
+	IConsoleAliasRegister("scrollto_highlight", "scrollto %+; highlight_tile %+");
 	IConsoleCmdRegister("alias",        ConAlias);
 	IConsoleCmdRegister("load",         ConLoad);
 	IConsoleCmdRegister("rm",           ConRemove);
@@ -2158,6 +2614,7 @@ void IConsoleStdLibRegister()
 	IConsoleAliasRegister("info",          "server_info");
 	IConsoleCmdRegister("reconnect",       ConNetworkReconnect, ConHookClientOnly);
 	IConsoleCmdRegister("rcon",            ConRcon, ConHookNeedNetwork);
+	IConsoleCmdRegister("settings_access", ConSettingsAccess, ConHookNeedNetwork);
 
 	IConsoleCmdRegister("join",            ConJoinCompany, ConHookNeedNetwork);
 	IConsoleAliasRegister("spectate",      "join 255");
@@ -2182,6 +2639,8 @@ void IConsoleStdLibRegister()
 	IConsoleAliasRegister("server_password",       "setting server_password %+");
 	IConsoleAliasRegister("rcon_pw",               "setting rcon_password %+");
 	IConsoleAliasRegister("rcon_password",         "setting rcon_password %+");
+	IConsoleAliasRegister("settings_pw",           "setting settings_password %+");
+	IConsoleAliasRegister("settings_password",     "setting settings_password %+");
 	IConsoleAliasRegister("name",                  "setting client_name %+");
 	IConsoleAliasRegister("server_name",           "setting server_name %+");
 	IConsoleAliasRegister("server_port",           "setting server_port %+");
@@ -2205,7 +2664,30 @@ void IConsoleStdLibRegister()
 	IConsoleCmdRegister("fps",     ConFramerate);
 	IConsoleCmdRegister("fps_wnd", ConFramerateWindow);
 
+	IConsoleCmdRegister("dump_command_log", ConDumpCommandLog, nullptr, true);
+	IConsoleCmdRegister("dump_inflation", ConDumpInflation, nullptr, true);
+	IConsoleCmdRegister("dump_cpdp_stats", ConDumpCpdpStats, nullptr, true);
+	IConsoleCmdRegister("dump_veh_stats", ConVehicleStats, nullptr, true);
+	IConsoleCmdRegister("dump_map_stats", ConMapStats, nullptr, true);
+	IConsoleCmdRegister("dump_st_flow_stats", ConStFlowStats, nullptr, true);
+	IConsoleCmdRegister("dump_game_events", ConDumpGameEvents, nullptr, true);
+	IConsoleCmdRegister("dump_load_debug_log", ConDumpLoadDebugLog, nullptr, true);
+	IConsoleCmdRegister("dump_load_debug_config", ConDumpLoadDebugConfig, nullptr, true);
+	IConsoleCmdRegister("check_caches", ConCheckCaches, nullptr, true);
+	IConsoleCmdRegister("show_town_window", ConShowTownWindow, nullptr, true);
+	IConsoleCmdRegister("show_station_window", ConShowStationWindow, nullptr, true);
+	IConsoleCmdRegister("show_industry_window", ConShowIndustryWindow, nullptr, true);
+	IConsoleCmdRegister("viewport_debug", ConViewportDebug, nullptr, true);
+	IConsoleCmdRegister("viewport_mark_dirty", ConViewportMarkDirty, nullptr, true);
+
 	/* NewGRF development stuff */
 	IConsoleCmdRegister("reload_newgrfs",  ConNewGRFReload, ConHookNewGRFDeveloperTool);
 	IConsoleCmdRegister("newgrf_profile",  ConNewGRFProfile, ConHookNewGRFDeveloperTool);
+	IConsoleCmdRegister("do_disaster", ConDoDisaster, ConHookNewGRFDeveloperTool, true);
+	IConsoleCmdRegister("bankrupt_company", ConBankruptCompany, ConHookNewGRFDeveloperTool, true);
+	IConsoleCmdRegister("delete_company", ConDeleteCompany, ConHookNewGRFDeveloperTool, true);
+
+	/* Bug workarounds */
+	IConsoleCmdRegister("jgrpp_bug_workaround_unblock_heliports", ConResetBlockedHeliports, ConHookNoNetwork, true);
+	IConsoleCmdRegister("merge_linkgraph_jobs_asap", ConMergeLinkgraphJobsAsap, ConHookNoNetwork, true);
 }

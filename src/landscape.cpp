@@ -28,11 +28,15 @@
 #include "core/random_func.hpp"
 #include "object_base.h"
 #include "company_func.h"
+#include "tunnelbridge_map.h"
 #include "pathfinder/npf/aystar.h"
 #include "saveload/saveload.h"
 #include "framerate_type.h"
+#include "3rdparty/cpp-btree/btree_set.h"
+#include "scope_info.h"
 #include <list>
 #include <set>
+#include <deque>
 
 #include "table/strings.h"
 #include "table/sprites.h"
@@ -431,6 +435,8 @@ Slope GetFoundationSlope(TileIndex tile, int *z)
 
 bool HasFoundationNW(TileIndex tile, Slope slope_here, uint z_here)
 {
+	if (IsCustomBridgeHeadTile(tile) && GetTunnelBridgeDirection(tile) == DIAGDIR_NW) return false;
+
 	int z;
 
 	int z_W_here = z_here;
@@ -448,6 +454,8 @@ bool HasFoundationNW(TileIndex tile, Slope slope_here, uint z_here)
 
 bool HasFoundationNE(TileIndex tile, Slope slope_here, uint z_here)
 {
+	if (IsCustomBridgeHeadTile(tile) && GetTunnelBridgeDirection(tile) == DIAGDIR_NE) return false;
+
 	int z;
 
 	int z_E_here = z_here;
@@ -645,9 +653,7 @@ byte GetSnowLine()
 {
 	if (_snow_line == nullptr) return _settings_game.game_creation.snow_line_height;
 
-	YearMonthDay ymd;
-	ConvertDateToYMD(_date, &ymd);
-	return _snow_line->table[ymd.month][ymd.day];
+	return _snow_line->table[_cur_date_ymd.month][_cur_date_ymd.day];
 }
 
 /**
@@ -697,7 +703,9 @@ CommandCost CmdLandscapeClear(TileIndex tile, DoCommandFlag flags, uint32 p1, ui
 	if ((flags & DC_FORCE_CLEAR_TILE) && HasTileWaterClass(tile) && IsTileOnWater(tile) && !IsWaterTile(tile) && !IsCoastTile(tile)) {
 		if ((flags & DC_AUTO) && GetWaterClass(tile) == WATER_CLASS_CANAL) return_cmd_error(STR_ERROR_MUST_DEMOLISH_CANAL_FIRST);
 		do_clear = true;
-		cost.AddCost(GetWaterClass(tile) == WATER_CLASS_CANAL ? _price[PR_CLEAR_CANAL] : _price[PR_CLEAR_WATER]);
+		const bool is_canal = GetWaterClass(tile) == WATER_CLASS_CANAL;
+		if (!is_canal && _game_mode != GM_EDITOR && !_settings_game.construction.enable_remove_water && !(flags & DC_ALLOW_REMOVE_WATER)) return_cmd_error(STR_ERROR_CAN_T_BUILD_ON_WATER);
+		cost.AddCost(is_canal ? _price[PR_CLEAR_CANAL] : _price[PR_CLEAR_WATER]);
 	}
 
 	Company *c = (flags & (DC_AUTO | DC_BANKRUPT)) ? nullptr : Company::GetIfValid(_current_company);
@@ -806,12 +814,13 @@ void RunTileLoop()
 	 * shift register (LFSR). This allows a deterministic pseudorandom ordering, but
 	 * still with minimal state and fast iteration. */
 
-	/* Maximal length LFSR feedback terms, from 12-bit (for 64x64 maps) to 24-bit (for 4096x4096 maps).
+	/* Maximal length LFSR feedback terms, from 12-bit (for 64x64 maps) to 28-bit (for 16kx16k maps).
 	 * Extracted from http://www.ece.cmu.edu/~koopman/lfsr/ */
 	static const uint32 feedbacks[] = {
-		0xD8F, 0x1296, 0x2496, 0x4357, 0x8679, 0x1030E, 0x206CD, 0x403FE, 0x807B8, 0x1004B2, 0x2006A8, 0x4004B2, 0x800B87
+		0xD8F, 0x1296, 0x2496, 0x4357, 0x8679, 0x1030E, 0x206CD, 0x403FE, 0x807B8, 0x1004B2, 0x2006A8,
+		0x4004B2, 0x800B87, 0x10004F3, 0x200072D, 0x40006AE, 0x80009E3,
 	};
-	assert_compile(lengthof(feedbacks) == 2 * MAX_MAP_SIZE_BITS - 2 * MIN_MAP_SIZE_BITS + 1);
+	assert_compile(lengthof(feedbacks) == MAX_MAP_TILES_BITS - 2 * MIN_MAP_SIZE_BITS + 1);
 	const uint32 feedback = feedbacks[MapLogX() + MapLogY() - 2 * MIN_MAP_SIZE_BITS];
 
 	/* We update every tile every 256 ticks, so divide the map size by 2^8 = 256 */
@@ -820,6 +829,8 @@ void RunTileLoop()
 	TileIndex tile = _cur_tileloop_tile;
 	/* The LFSR cannot have a zeroed state. */
 	assert(tile != 0);
+
+	SCOPE_INFO_FMT([&], "RunTileLoop: tile: %dx%d", TileX(tile), TileY(tile));
 
 	/* Manually update tile 0 every 256 ticks - the LFSR never iterates over it itself.  */
 	if (_tick_counter % 256 == 0) {
@@ -1192,11 +1203,11 @@ static bool FlowRiver(TileIndex spring, TileIndex begin)
 	uint height = TileHeight(begin);
 	if (IsWaterTile(begin)) return DistanceManhattan(spring, begin) > _settings_game.game_creation.min_river_length;
 
-	std::set<TileIndex> marks;
+	btree::btree_set<TileIndex> marks;
 	SET_MARK(begin);
 
 	/* Breadth first search for the closest tile we can flow down to. */
-	std::list<TileIndex> queue;
+	std::deque<TileIndex> queue;
 	queue.push_back(begin);
 
 	bool found = false;
@@ -1229,7 +1240,7 @@ static bool FlowRiver(TileIndex spring, TileIndex begin)
 		/* Maybe we can make a lake. Find the Nth of the considered tiles. */
 		TileIndex lakeCenter = 0;
 		int i = RandomRange(count - 1) + 1;
-		std::set<TileIndex>::const_iterator cit = marks.begin();
+		btree::btree_set<TileIndex>::const_iterator cit = marks.begin();
 		while (--i) cit++;
 		lakeCenter = *cit;
 

@@ -10,6 +10,8 @@
 #ifndef RANDOM_FUNC_HPP
 #define RANDOM_FUNC_HPP
 
+#include "bitmath_func.hpp"
+
 #if defined(__APPLE__)
 	/* Apple already has Random declared */
 #	define Random OTTD_Random
@@ -47,13 +49,29 @@ static inline void SaveRandomSeeds(SavedRandomSeeds *storage)
 
 /**
  * Restores previously saved seeds
- * @param storage Storage where SaveRandomSeeds() stored th seeds
+ * @param storage Storage where SaveRandomSeeds() stored the seeds
  */
 static inline void RestoreRandomSeeds(const SavedRandomSeeds &storage)
 {
 	_random = storage.random;
 	_interactive_random = storage.interactive_random;
 }
+
+struct GameRandomSeedChecker {
+private:
+	Randomizer random;
+
+public:
+	GameRandomSeedChecker()
+	{
+		this->random = _random;
+	}
+
+	bool Check() const
+	{
+		return (this->random.state[0] == _random.state[0] && this->random.state[1] == _random.state[1]);
+	}
+};
 
 void SetRandomSeed(uint32 seed);
 #ifdef RANDOM_DEBUG

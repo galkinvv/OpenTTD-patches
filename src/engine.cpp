@@ -28,6 +28,7 @@
 #include "company_base.h"
 #include "vehicle_func.h"
 #include "articulated_vehicles.h"
+#include "settings_type.h"
 #include "error.h"
 
 #include "table/strings.h"
@@ -271,6 +272,15 @@ uint Engine::DetermineCapacity(const Vehicle *v, uint16 *mail_capacity) const
 	}
 
 	return capacity;
+}
+
+/**
+ * Return display value of how much the running costs of this engine are.
+ * @return Yearly running cost of the engine.
+ */
+Money Engine::GetDisplayRunningCost() const
+{
+	return this->GetRunningCost() * _settings_game.economy.day_length_factor;
 }
 
 /**
@@ -568,6 +578,18 @@ static bool IsWagon(EngineID index)
 	return e->type == VEH_TRAIN && e->u.rail.railveh_type == RAILVEH_WAGON;
 }
 
+static void RetireEngineIfPossible(Engine *e, int age_threshold)
+{
+	if (_settings_game.vehicle.no_expire_vehicles_after > 0) {
+		YearMonthDay ymd;
+		ConvertDateToYMD(e->intro_date, &ymd);
+		if ((ymd.year * 12) + ymd.month + age_threshold >= _settings_game.vehicle.no_expire_vehicles_after * 12) return;
+	}
+
+	e->company_avail = 0;
+	AddRemoveEngineFromAutoreplaceAndBuildWindows(e->type);
+}
+
 /**
  * Update #Engine::reliability and (if needed) update the engine GUIs.
  * @param e %Engine to update.
@@ -582,8 +604,7 @@ static void CalcEngineReliability(Engine *e)
 		uint retire_early_max_age = max(0, e->duration_phase_1 + e->duration_phase_2 - retire_early * 12);
 		if (retire_early != 0 && age >= retire_early_max_age) {
 			/* Early retirement is enabled and we're past the date... */
-			e->company_avail = 0;
-			AddRemoveEngineFromAutoreplaceAndBuildWindows(e->type);
+			RetireEngineIfPossible(e, retire_early_max_age);
 		}
 	}
 
@@ -598,12 +619,11 @@ static void CalcEngineReliability(Engine *e)
 		uint max = e->reliability_max;
 		e->reliability = (int)age * (int)(e->reliability_final - max) / e->duration_phase_3 + max;
 	} else {
+		e->reliability = e->reliability_final;
 		/* time's up for this engine.
 		 * We will now completely retire this design */
-		e->company_avail = 0;
-		e->reliability = e->reliability_final;
 		/* Kick this engine out of the lists */
-		AddRemoveEngineFromAutoreplaceAndBuildWindows(e->type);
+		RetireEngineIfPossible(e, e->duration_phase_1 + e->duration_phase_2 + e->duration_phase_3);
 	}
 	SetWindowClassesDirty(WC_BUILD_VEHICLE); // Update to show the new reliability
 	SetWindowClassesDirty(WC_REPLACE_VEHICLE);
@@ -793,7 +813,7 @@ static CompanyID GetPreviewCompany(Engine *e)
 
 			/* Check whether the company uses similar vehicles */
 			for (const Vehicle *v : Vehicle::Iterate()) {
-				if (v->owner != c->index || v->type != e->type) continue;
+				if (v->owner != c->index || v->type != e->type || HasBit(v->subtype, GVSF_VIRTUAL)) continue;
 				if (!v->GetEngine()->CanCarryCargo() || !HasBit(cargomask, v->cargo_type)) continue;
 
 				best_hist = c->old_economy[0].performance_history;
@@ -971,7 +991,7 @@ static void NewVehicleAvailable(Engine *e)
 			c->block_preview = 20;
 
 			for (const Vehicle *v : Vehicle::Iterate()) {
-				if (v->type == VEH_TRAIN || v->type == VEH_ROAD || v->type == VEH_SHIP ||
+				if ((v->type == VEH_TRAIN && !HasBit(v->subtype, GVSF_VIRTUAL)) || v->type == VEH_ROAD || v->type == VEH_SHIP ||
 						(v->type == VEH_AIRCRAFT && Aircraft::From(v)->IsNormalAircraft())) {
 					if (v->owner == c->index && v->engine_type == index) {
 						/* The user did prove me wrong, so restore old value */

@@ -44,7 +44,7 @@ macro(compile_flags)
 
     # Prepare a generator that checks if we are not a debug, and don't have asserts
     # on. We need this later on to set some compile options for stable releases.
-    set(IS_STABLE_RELEASE "$<AND:$<NOT:$<CONFIG:Debug>>,$<NOT:$<BOOL:${OPTION_USE_ASSERTS}>>>")
+    #set(IS_STABLE_RELEASE "$<AND:$<NOT:$<CONFIG:Debug>>,$<NOT:$<BOOL:${OPTION_USE_ASSERTS}>>>")
 
     if (MSVC)
         add_compile_options(/W3)
@@ -76,21 +76,26 @@ macro(compile_flags)
             -fno-strict-aliasing
         )
 
+        if(NOT CMAKE_BUILD_TYPE)
+            # Sensible default if no build type specified
+            add_compile_options(-O2 -DNDEBUG)
+        endif(NOT CMAKE_BUILD_TYPE)
+
         # When we are a stable release (Release build + USE_ASSERTS not set),
         # assertations are off, which trigger a lot of warnings. We disable
         # these warnings for these releases.
-        if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-            add_compile_options(
-                "$<${IS_STABLE_RELEASE}:-Wno-unused-variable>"
-                "$<${IS_STABLE_RELEASE}:-Wno-unused-but-set-parameter>"
-                "$<${IS_STABLE_RELEASE}:-Wno-unused-but-set-variable>"
-            )
-        else (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-            add_compile_options(
-                "$<${IS_STABLE_RELEASE}:-Wno-unused-variable>"
-                "$<${IS_STABLE_RELEASE}:-Wno-unused-parameter>"
-            )
-        endif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        #if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        #    add_compile_options(
+        #        "$<${IS_STABLE_RELEASE}:-Wno-unused-variable>"
+        #        "$<${IS_STABLE_RELEASE}:-Wno-unused-but-set-parameter>"
+        #        "$<${IS_STABLE_RELEASE}:-Wno-unused-but-set-variable>"
+        #    )
+        #else (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        #    add_compile_options(
+        #        "$<${IS_STABLE_RELEASE}:-Wno-unused-variable>"
+        #        "$<${IS_STABLE_RELEASE}:-Wno-unused-parameter>"
+        #    )
+        #endif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 
         # Ninja processes the output so the output from the compiler
         # isn't directly to a terminal; hence, the default is
@@ -125,6 +130,12 @@ macro(compile_flags)
                 "$<$<BOOL:${LIFETIME_DSE_FOUND}>:-flifetime-dse=1>"
             )
         endif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+
+        if (APPLE)
+            add_compile_options(
+                -fno-stack-check
+            )
+        endif (APPLE)
     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
         add_compile_options(
             -Wall

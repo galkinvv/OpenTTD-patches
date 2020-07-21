@@ -14,6 +14,7 @@
 #include "newgrf_station.h"
 #include "waypoint_base.h"
 #include "viewport_kdtree.h"
+#include "tracerestrict.h"
 
 #include "safeguards.h"
 
@@ -53,5 +54,6 @@ Waypoint::~Waypoint()
 	if (CleaningPool()) return;
 	DeleteWindowById(WC_WAYPOINT_VIEW, this->index);
 	RemoveOrderFromAllVehicles(OT_GOTO_WAYPOINT, this->index);
-	if (this->sign.kdtree_valid) _viewport_sign_kdtree.Remove(ViewportSignKdtreeItem::MakeWaypoint(this->index));
+	if (_viewport_sign_kdtree_valid && this->sign.kdtree_valid) _viewport_sign_kdtree.Remove(ViewportSignKdtreeItem::MakeWaypoint(this->index));
+	TraceRestrictRemoveDestinationID(TROCAF_WAYPOINT, this->index);
 }

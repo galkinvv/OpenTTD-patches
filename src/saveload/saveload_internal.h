@@ -27,6 +27,7 @@ const SaveLoad *GetBaseStationDescription();
 
 void AfterLoadVehicles(bool part_of_load);
 void FixupTrainLengths();
+void AfterLoadTemplateVehicles();
 void AfterLoadStations();
 void AfterLoadRoadStops();
 void ResetLabelMaps();
@@ -34,7 +35,8 @@ void AfterLoadLabelMaps();
 void AfterLoadStoryBook();
 void AfterLoadLinkGraphs();
 void AfterLoadCompanyStats();
-void UpdateHousesAndTowns();
+void AfterLoadTraceRestrict();
+void UpdateHousesAndTowns(bool cargo_update_required);
 
 void UpdateOldAircraft();
 
@@ -47,6 +49,8 @@ void ConnectMultiheadedTrains();
 void ResetTempEngineData();
 Engine *GetTempDataEngine(EngineID index);
 void CopyTempEngineData();
+
+void AfterLoadTemplateVehiclesUpdateImage();
 
 extern int32 _saved_scrollpos_x;
 extern int32 _saved_scrollpos_y;

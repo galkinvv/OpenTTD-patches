@@ -31,6 +31,7 @@ static const uint16 NETWORK_ADMIN_PORT            = 3977;         ///< The defau
 static const uint16 NETWORK_DEFAULT_DEBUGLOG_PORT = 3982;         ///< The default port debug-log is sent to (TCP)
 
 static const uint16 SEND_MTU                      = 1460;         ///< Number of bytes we can pack in a single packet
+static const uint16 SEND_MTU_SHORT                = 1400;         ///< Number of bytes we can pack in a single packet (conservative)
 
 static const byte NETWORK_GAME_ADMIN_VERSION      =    1;         ///< What version of the admin network do we use?
 static const byte NETWORK_GAME_INFO_VERSION       =    4;         ///< What version of game-info do we use?
@@ -42,6 +43,7 @@ static const uint NETWORK_COMPANY_NAME_LENGTH     =  128;         ///< The maxim
 static const uint NETWORK_HOSTNAME_LENGTH         =   80;         ///< The maximum length of the host name, in bytes including '\0'
 static const uint NETWORK_SERVER_ID_LENGTH        =   33;         ///< The maximum length of the network id of the servers, in bytes including '\0'
 static const uint NETWORK_REVISION_LENGTH         =   33;         ///< The maximum length of the revision, in bytes including '\0'
+static const uint NETWORK_LONG_REVISION_LENGTH    =   64;         ///< The maximum length of the revision, in bytes including '\0'
 static const uint NETWORK_PASSWORD_LENGTH         =   33;         ///< The maximum length of the password, in bytes including '\0' (must be >= NETWORK_SERVER_ID_LENGTH)
 static const uint NETWORK_CLIENTS_LENGTH          =  200;         ///< The maximum length for the list of clients that controls a company, in bytes including '\0'
 static const uint NETWORK_CLIENT_NAME_LENGTH      =   25;         ///< The maximum length of a client's name, in bytes including '\0'
@@ -56,6 +58,7 @@ static const uint NETWORK_GRF_NAME_LENGTH         =   80;         ///< Maximum l
  * This limit is reached when PACKET_UDP_SERVER_RESPONSE reaches the maximum size of SEND_MTU bytes.
  */
 static const uint NETWORK_MAX_GRF_COUNT           =   62;
+static const uint NETWORK_MAX_GRF_COUNT_SHORT     =   59;
 
 static const uint NETWORK_NUM_LANGUAGES           =   36; ///< Number of known languages (to the network protocol) + 1 for 'any'.
 

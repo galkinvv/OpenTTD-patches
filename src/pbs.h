@@ -20,7 +20,9 @@ TrackBits GetReservedTrackbits(TileIndex t);
 void SetRailStationPlatformReservation(TileIndex start, DiagDirection dir, bool b);
 
 bool TryReserveRailTrack(TileIndex tile, Track t, bool trigger_stations = true);
+bool TryReserveRailTrackdir(TileIndex tile, Trackdir td, bool trigger_stations = true);
 void UnreserveRailTrack(TileIndex tile, Track t);
+void UnreserveRailTrackdir(TileIndex tile, Trackdir td);
 
 /** This struct contains information about the end of a reserved path. */
 struct PBSTileInfo {
@@ -42,9 +44,14 @@ struct PBSTileInfo {
 	PBSTileInfo(TileIndex _t, Trackdir _td, bool _okay) : tile(_t), trackdir(_td), okay(_okay) {}
 };
 
+struct PBSWaitingPositionRestrictedSignalInfo {
+	TileIndex tile = INVALID_TILE;
+	Trackdir  trackdir = INVALID_TRACKDIR;
+};
+
 PBSTileInfo FollowTrainReservation(const Train *v, Vehicle **train_on_res = nullptr);
 bool IsSafeWaitingPosition(const Train *v, TileIndex tile, Trackdir trackdir, bool include_line_end, bool forbid_90deg = false);
-bool IsWaitingPositionFree(const Train *v, TileIndex tile, Trackdir trackdir, bool forbid_90deg = false);
+bool IsWaitingPositionFree(const Train *v, TileIndex tile, Trackdir trackdir, bool forbid_90deg = false, PBSWaitingPositionRestrictedSignalInfo *restricted_signal_info = nullptr);
 
 Train *GetTrainForReservation(TileIndex tile, Track track);
 

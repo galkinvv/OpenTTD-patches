@@ -14,6 +14,7 @@
 #include "../tunnelbridge_map.h"
 #include "../tunnelbridge.h"
 #include "../station_base.h"
+#include "../settings_func.h"
 #include "../strings_func.h"
 
 #include "saveload.h"
@@ -112,8 +113,12 @@ void AfterLoadCompanyStats()
 					uint pieces = 1;
 					if (IsPlainRail(tile)) {
 						TrackBits bits = GetTrackBits(tile);
-						pieces = CountBits(bits);
-						if (TracksOverlap(bits)) pieces *= pieces;
+						if (bits == TRACK_BIT_HORZ || bits == TRACK_BIT_VERT) {
+							c->infrastructure.rail[GetSecondaryRailType(tile)]++;
+						} else {
+							pieces = CountBits(bits);
+							if (TracksOverlap(bits)) pieces *= pieces;
+						}
 					}
 					c->infrastructure.rail[GetRailType(tile)] += pieces;
 
@@ -199,28 +204,21 @@ void AfterLoadCompanyStats()
 				if (tile < other_end) {
 					/* Count each tunnel/bridge TUNNELBRIDGE_TRACKBIT_FACTOR times to simulate
 					 * the higher structural maintenance needs, and don't forget the end tiles. */
-					uint len = (GetTunnelBridgeLength(tile, other_end) + 2) * TUNNELBRIDGE_TRACKBIT_FACTOR;
+					const uint middle_len = GetTunnelBridgeLength(tile, other_end) * TUNNELBRIDGE_TRACKBIT_FACTOR;
 
 					switch (GetTunnelBridgeTransportType(tile)) {
 						case TRANSPORT_RAIL:
-							c = Company::GetIfValid(GetTileOwner(tile));
-							if (c != nullptr) c->infrastructure.rail[GetRailType(tile)] += len;
+							AddRailTunnelBridgeInfrastructure(tile, other_end);
 							break;
 
 						case TRANSPORT_ROAD: {
-							/* Iterate all present road types as each can have a different owner. */
-							FOR_ALL_ROADTRAMTYPES(rtt) {
-								RoadType rt = GetRoadType(tile, rtt);
-								if (rt == INVALID_ROADTYPE) continue;
-								c = Company::GetIfValid(GetRoadOwner(tile, rtt));
-								if (c != nullptr) c->infrastructure.road[rt] += len * 2; // A full diagonal road has two road bits.
-							}
+							AddRoadTunnelBridgeInfrastructure(tile, other_end);
 							break;
 						}
 
 						case TRANSPORT_WATER:
 							c = Company::GetIfValid(GetTileOwner(tile));
-							if (c != nullptr) c->infrastructure.water += len;
+							if (c != nullptr) c->infrastructure.water += middle_len + (2 * TUNNELBRIDGE_TRACKBIT_FACTOR);
 							break;
 
 						default:
@@ -284,7 +282,8 @@ static const SaveLoad _company_desc[] = {
 
 	/* yearly expenses was changed to 64-bit in savegame version 2. */
 	SLE_CONDARR(CompanyProperties, yearly_expenses,       SLE_FILE_I32 | SLE_VAR_I64, 3 * 13, SL_MIN_VERSION, SLV_2),
-	SLE_CONDARR(CompanyProperties, yearly_expenses,       SLE_INT64, 3 * 13,                  SLV_2, SL_MAX_VERSION),
+	SLE_CONDARR_X(CompanyProperties, yearly_expenses,     SLE_INT64, 3 * 13,                  SLV_2, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_INFRA_SHARING, 0, 0)),
+	SLE_CONDARR_X(CompanyProperties, yearly_expenses,     SLE_INT64, 3 * 15,                  SLV_2, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_INFRA_SHARING)),
 
 	SLE_CONDVAR(CompanyProperties, is_ai,                 SLE_BOOL,                    SLV_2, SL_MAX_VERSION),
 	SLE_CONDNULL(1, SLV_107, SLV_112), ///< is_noai
@@ -293,6 +292,7 @@ static const SaveLoad _company_desc[] = {
 	SLE_CONDVAR(CompanyProperties, terraform_limit,       SLE_UINT32,                SLV_156, SL_MAX_VERSION),
 	SLE_CONDVAR(CompanyProperties, clear_limit,           SLE_UINT32,                SLV_156, SL_MAX_VERSION),
 	SLE_CONDVAR(CompanyProperties, tree_limit,            SLE_UINT32,                SLV_175, SL_MAX_VERSION),
+	SLE_CONDVAR_X(CompanyProperties, purchase_land_limit, SLE_UINT32,         SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_BUY_LAND_RATE_LIMIT)),
 
 	SLE_END()
 };
@@ -312,6 +312,7 @@ static const SaveLoad _company_settings_desc[] = {
 	SLE_CONDVAR(Company, settings.vehicle.servint_roadveh,   SLE_UINT16,     SLV_120, SL_MAX_VERSION),
 	SLE_CONDVAR(Company, settings.vehicle.servint_aircraft,  SLE_UINT16,     SLV_120, SL_MAX_VERSION),
 	SLE_CONDVAR(Company, settings.vehicle.servint_ships,     SLE_UINT16,     SLV_120, SL_MAX_VERSION),
+	SLE_CONDVAR_X(Company, settings.vehicle.auto_timetable_by_default, SLE_BOOL, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_AUTO_TIMETABLE, 2, 2)),
 
 	SLE_CONDNULL(63, SLV_2, SLV_144), // old reserved space
 
@@ -334,6 +335,7 @@ static const SaveLoad _company_settings_skip_desc[] = {
 	SLE_CONDNULL(2, SLV_120, SL_MAX_VERSION),    // settings.vehicle.servint_roadveh
 	SLE_CONDNULL(2, SLV_120, SL_MAX_VERSION),    // settings.vehicle.servint_aircraft
 	SLE_CONDNULL(2, SLV_120, SL_MAX_VERSION),    // settings.vehicle.servint_ships
+	SLE_CONDNULL_X(1, SL_MIN_VERSION, SL_MAX_VERSION, SlXvFeatureTest(XSLFTO_AND, XSLFI_AUTO_TIMETABLE, 2, 2)), // settings.vehicle.auto_timetable_by_default
 
 	SLE_CONDNULL(63, SLV_2, SLV_144), // old reserved space
 
@@ -496,8 +498,17 @@ static void Load_PLYR()
 	int index;
 	while ((index = SlIterateArray()) != -1) {
 		Company *c = new (index) Company();
+		SetDefaultCompanySettings(c->index);
 		SaveLoad_PLYR(c);
 		_company_colours[index] = (Colours)c->colour;
+
+		// settings moved from game settings to company settings
+		if (SlXvIsFeaturePresent(XSLFI_AUTO_TIMETABLE, 1, 2)) {
+			c->settings.auto_timetable_separation_rate = _settings_game.order.old_timetable_separation_rate;
+		}
+		if (SlXvIsFeaturePresent(XSLFI_AUTO_TIMETABLE, 1, 3)) {
+			c->settings.vehicle.auto_separation_by_default = _settings_game.order.old_timetable_separation;
+		}
 	}
 }
 
@@ -537,7 +548,25 @@ static void Ptrs_PLYR()
 	}
 }
 
+extern void LoadSettingsPlyx(bool skip);
+extern void SaveSettingsPlyx();
+
+static void Load_PLYX()
+{
+	LoadSettingsPlyx(false);
+}
+
+static void Check_PLYX()
+{
+	LoadSettingsPlyx(true);
+}
+
+static void Save_PLYX()
+{
+	SaveSettingsPlyx();
+}
 
 extern const ChunkHandler _company_chunk_handlers[] = {
-	{ 'PLYR', Save_PLYR, Load_PLYR, Ptrs_PLYR, Check_PLYR, CH_ARRAY | CH_LAST},
+	{ 'PLYR', Save_PLYR, Load_PLYR, Ptrs_PLYR, Check_PLYR, CH_ARRAY },
+	{ 'PLYX', Save_PLYX, Load_PLYX, nullptr,      Check_PLYX, CH_RIFF | CH_LAST},
 };

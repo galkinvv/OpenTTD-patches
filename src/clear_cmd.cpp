@@ -44,18 +44,43 @@ static CommandCost ClearTile_Clear(TileIndex tile, DoCommandFlag flags)
 	return price;
 }
 
+SpriteID GetSpriteIDForClearLand(const Slope slope, byte set)
+{
+	return SPR_FLAT_BARE_LAND + SlopeToSpriteOffset(slope) + set * 19;
+}
+
 void DrawClearLandTile(const TileInfo *ti, byte set)
 {
-	DrawGroundSprite(SPR_FLAT_BARE_LAND + SlopeToSpriteOffset(ti->tileh) + set * 19, PAL_NONE);
+	DrawGroundSprite(GetSpriteIDForClearLand(ti->tileh, set), PAL_NONE);
+}
+
+SpriteID GetSpriteIDForHillyLand(const Slope slope, const uint rough_index)
+{
+	if (slope != SLOPE_FLAT) {
+		return SPR_FLAT_ROUGH_LAND + SlopeToSpriteOffset(slope);
+	} else {
+		return _landscape_clear_sprites_rough[rough_index];
+	}
 }
 
 void DrawHillyLandTile(const TileInfo *ti)
 {
-	if (ti->tileh != SLOPE_FLAT) {
-		DrawGroundSprite(SPR_FLAT_ROUGH_LAND + SlopeToSpriteOffset(ti->tileh), PAL_NONE);
-	} else {
-		DrawGroundSprite(_landscape_clear_sprites_rough[GB(TileHash(ti->x, ti->y), 0, 3)], PAL_NONE);
-	}
+	DrawGroundSprite(GetSpriteIDForHillyLand(ti->tileh, GB(TileHash(ti->x, ti->y), 4, 3)), PAL_NONE);
+}
+
+SpriteID GetSpriteIDForRocks(const Slope slope, const uint tile_hash)
+{
+	return ((HasGrfMiscBit(GMB_SECOND_ROCKY_TILE_SET) && (tile_hash & 1)) ? SPR_FLAT_ROCKY_LAND_2 : SPR_FLAT_ROCKY_LAND_1) + SlopeToSpriteOffset(slope);
+}
+
+SpriteID GetSpriteIDForFields(const Slope slope, const uint field_type)
+{
+	return _clear_land_sprites_farmland[field_type] + SlopeToSpriteOffset(slope);
+}
+
+SpriteID GetSpriteIDForSnowDesert(const Slope slope, const uint density)
+{
+	return _clear_land_sprites_snow_desert[density] + SlopeToSpriteOffset(slope);
 }
 
 static void DrawClearLandFence(const TileInfo *ti)
@@ -98,29 +123,31 @@ static void DrawClearLandFence(const TileInfo *ti)
 	EndSpriteCombine();
 }
 
-static void DrawTile_Clear(TileInfo *ti)
+static void DrawTile_Clear(TileInfo *ti, DrawTileProcParams params)
 {
 	switch (GetClearGround(ti->tile)) {
 		case CLEAR_GRASS:
-			DrawClearLandTile(ti, GetClearDensity(ti->tile));
+			if (!params.no_ground_tiles) DrawClearLandTile(ti, GetClearDensity(ti->tile));
 			break;
 
 		case CLEAR_ROUGH:
-			DrawHillyLandTile(ti);
+			if (!params.no_ground_tiles) DrawHillyLandTile(ti);
 			break;
 
 		case CLEAR_ROCKS:
-			DrawGroundSprite((HasGrfMiscBit(GMB_SECOND_ROCKY_TILE_SET) && (TileHash(ti->x, ti->y) & 1) ? SPR_FLAT_ROCKY_LAND_2 : SPR_FLAT_ROCKY_LAND_1) + SlopeToSpriteOffset(ti->tileh), PAL_NONE);
+			if (!params.no_ground_tiles) DrawGroundSprite(GetSpriteIDForRocks(ti->tileh, TileHash(ti->x, ti->y)), PAL_NONE);
 			break;
 
 		case CLEAR_FIELDS:
-			DrawGroundSprite(_clear_land_sprites_farmland[GetFieldType(ti->tile)] + SlopeToSpriteOffset(ti->tileh), PAL_NONE);
-			DrawClearLandFence(ti);
+			if (params.min_visible_height <= 4 * ZOOM_LVL_BASE) {
+				DrawGroundSprite(GetSpriteIDForFields(ti->tileh, GetFieldType(ti->tile)), PAL_NONE);
+				DrawClearLandFence(ti);
+			}
 			break;
 
 		case CLEAR_SNOW:
 		case CLEAR_DESERT:
-			DrawGroundSprite(_clear_land_sprites_snow_desert[GetClearDensity(ti->tile)] + SlopeToSpriteOffset(ti->tileh), PAL_NONE);
+			if (!params.no_ground_tiles) DrawGroundSprite(GetSpriteIDForSnowDesert(ti->tileh, GetClearDensity(ti->tile)), PAL_NONE);
 			break;
 	}
 
@@ -142,7 +169,7 @@ static Foundation GetFoundation_Clear(TileIndex tile, Slope tileh)
 
 static void UpdateFences(TileIndex tile)
 {
-	assert(IsTileType(tile, MP_CLEAR) && IsClearGround(tile, CLEAR_FIELDS));
+	assert_tile(IsTileType(tile, MP_CLEAR) && IsClearGround(tile, CLEAR_FIELDS), tile);
 	bool dirty = false;
 
 	bool neighbour = (IsTileType(TILE_ADDXY(tile, 1, 0), MP_CLEAR) && IsClearGround(TILE_ADDXY(tile, 1, 0), CLEAR_FIELDS));
@@ -169,7 +196,7 @@ static void UpdateFences(TileIndex tile)
 		dirty = true;
 	}
 
-	if (dirty) MarkTileDirtyByTile(tile);
+	if (dirty) MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 }
 
 
@@ -252,7 +279,6 @@ static void TileLoop_Clear(TileIndex tile)
 		int z;
 		if (IsTileFlat(tile, &z) && z == 0) {
 			DoFloodTile(tile);
-			MarkTileDirtyByTile(tile);
 			return;
 		}
 	}
@@ -306,7 +332,7 @@ static void TileLoop_Clear(TileIndex tile)
 			return;
 	}
 
-	MarkTileDirtyByTile(tile);
+	MarkTileDirtyByTile(tile, ZOOM_LVL_DRAW_MAP);
 }
 
 void GenerateClearTile()
